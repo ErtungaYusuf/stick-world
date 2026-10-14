@@ -1,0 +1,20 @@
+{
+  "name": "stick-world",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Open-world stick figure village simulation: Node backend, SQLite database, canvas frontend",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/sim.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,28 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #3d6b3a; }
+canvas { display: block; width: 100vw; height: 100vh; }
+
+.hud {
+  position: fixed;
+  pointer-events: none;
+  font: 500 13px/1.7 "Segoe UI", system-ui, sans-serif;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .5);
+  letter-spacing: .02em;
+  transition: opacity 1.5s ease;
+}
+.hud b { font-weight: 700; }
+
+#help { left: 20px; top: 16px; opacity: .92; }
+
+#stats { left: 20px; bottom: 16px; opacity: .95; max-width: min(600px, calc(100vw - 40px)); }
+#stats .log { margin-top: 6px; font-size: 12.5px; line-height: 1.6; }
+#stats .log div:first-child { font-weight: 600; }
+#stats .log div:nth-child(n+4) { opacity: .6; }
+
+#status {
+  left: 50%; top: 16px; transform: translateX(-50%);
+  padding: 6px 14px; border-radius: 8px;
+  background: rgba(150, 40, 40, .85); font-weight: 600;
+  opacity: 0;
+}
+#status.show { opacity: 1; }
