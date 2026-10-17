@@ -10,10 +10,19 @@
 <canvas id="c"></canvas>
 <div id="help" class="hud">
   <b>W A S D</b> / <b>arrows</b> walk (N · W · S · E) &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>Space</b> jump<br>
-  <b>Mouse wheel</b> zoom &nbsp;·&nbsp; <b>T</b> (hold) speed up time ×40 &nbsp;·&nbsp; <b>H</b> hide help<br>
-  Hover a villager for info &nbsp;·&nbsp; <b>Click</b> to follow them with the camera
+  <b>Mouse wheel</b> zoom &nbsp;·&nbsp; <b>T</b> (hold) fast-forward ×40 &nbsp;·&nbsp; <b>H</b> hide help<br>
+  <b>E</b> gather / use what is in front &nbsp;·&nbsp; <b>R</b> strike &nbsp;·&nbsp; <b>Q</b> throw a bomb at the mouse &nbsp;·&nbsp; <b>I</b> bag, crafting &amp; building<br>
+  <b>F</b> watch the action (auto camera) &nbsp;·&nbsp; <b>M</b> sound on/off<br>
+  Hover a person to read their mind &nbsp;·&nbsp; <b>Click</b> to follow them &nbsp;·&nbsp; <b>G</b> society panel &nbsp;·&nbsp; <b>`</b> terminal (try <b>why &lt;name&gt;</b>)
+</div>
+<button id="term-btn" title="Terminal (`)">⌨</button>
+<div id="terminal">
+  <div class="bar">terminal <span class="close" title="close (Esc)">×</span></div>
+  <div class="out"></div>
+  <div class="line"><span>&gt;</span><input type="text" spellcheck="false" autocomplete="off" placeholder="help"></div>
 </div>
 <div id="stats" class="hud"></div>
+<div id="society" class="hud panel"></div>
 <div id="status" class="hud"></div>
 <script type="module" src="/js/main.js"></script>
 </body>

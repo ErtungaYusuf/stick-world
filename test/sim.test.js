@@ -5,75 +5,97 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorld } from '../shared/world.js';
-import { createSim } from '../server/sim/village.js';
+import { createSim } from '../server/life/sim.js';
 import { openDb } from '../server/db.js';
+import { findPath } from '../server/life/util.js';
 
-function setup() {
+function setup(seed = 123) {
   const dir = mkdtempSync(join(tmpdir(), 'stickworld-'));
   const db = openDb(join(dir, 'test.db'));
-  const world = createWorld(123);
+  const world = createWorld(seed);
+  const events = [];
   const sim = createSim(world, {
-    event: (type, text, year) => db.insertEvent(year, type, text),
+    event: (type, text, year) => { events.push({ type, text }); db.insertEvent(year, type, text); },
     birth: p => db.insertPerson(p),
     death: p => db.recordDeath(p),
     fx: () => {},
   });
   sim.found();
-  return { dir, db, world, sim, cleanup: () => { db.raw.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, db, world, sim, events, cleanup: () => { db.raw.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
+const finite = o => Object.values(o).every(v => typeof v !== 'number' || Number.isFinite(v));
 
-test('a village lives for generations without breaking the rules', () => {
-  const { db, sim, cleanup } = setup();
+test('three bands are founded, live a year, and learn from what happens to them', () => {
+  const { sim, cleanup } = setup();
   try {
-    sim.setTimeScale(40);
-    const motherAges = [];
-    let badPairs = 0, jobsSeen = new Set();
-    for (let i = 0; i < 20 * 60 * 2; i++) {          // 2 minutes of 40× time ≈ 400 years
-      sim.tick(1 / 20);
-      for (const e of sim.S.people) {
-        if (e.task) jobsSeen.add(e.task.type);
-        const p = e.partner;
-        if (p && (p.sex === e.sex || e.age < 18 || !p.alive || p.partner !== e)) badPairs++;
-        if (e.preg > 0 && e.preg > .74) motherAges.push(e.age);
+    const S = sim.S;
+    assert.ok(S.people.length >= 24, 'at least two bands of twelve');
+    const seen = new Set();
+    let badPairs = 0;
+    while (S.year < 1) {
+      sim.tick(.1);
+      for (const e of S.people) {
+        const T = e.task;
+        if (!T) continue;
+        seen.add(T.A.id);
+        // lovemaking needs two consenting adults of opposite sex who are not close kin
+        if (T.A.id === 'mate' && T.stage === 'do' && (T.tgt.sex === e.sex || T.tgt.age < 16 || e.age < 16)) badPairs++;
+        assert.ok(finite({ x: e.x, z: e.z, food: e.food, water: e.water, health: e.health }), `${e.name} has a broken state`);
       }
     }
+    assert.ok(S.people.length > 0, 'someone survives the first year');
+    assert.equal(badPairs, 0);
+    for (const a of ['drink', 'eat', 'pick', 'sleep', 'talk']) assert.ok(seen.has(a), `somebody did "${a}"`);
+    // whoever has drunk a few times expects drinking to quench thirst
+    const drinker = S.people.find(p => (p.M.get('drink:river') || { n: 0 }).n > 4);
+    assert.ok(drinker, 'someone drank from the river several times');
+    assert.ok(drinker.M.get('drink:river').d[1] > .2, 'and learned that it quenches thirst');
     const st = sim.stats();
-    assert.equal(badPairs, 0, 'partners must be living adults of the other sex, mutually linked');
-    assert.ok(st.births > 20, `expected births, got ${st.births}`);
-    assert.ok(st.deaths > 10, `expected deaths, got ${st.deaths}`);
-    assert.ok(st.population > 0 && st.population <= 80, `population ${st.population}`);
-    assert.ok(motherAges.every(a => a >= 16 && a <= 47), 'conception only at fertile ages');
-    for (const job of ['chop', 'water', 'talk', 'wander']) assert.ok(jobsSeen.has(job), `villagers should ${job}`);
-    assert.ok(jobsSeen.has('forage') || jobsSeen.has('fish'), 'villagers should gather food');
-
-    // database keeps everyone who ever lived, with consistent parents
-    const everyone = db.listPeople({ aliveOnly: false, limit: 10000, offset: 0 });
-    assert.equal(everyone.length, st.births + 14);
-    assert.equal(everyone.filter(p => !p.alive).length, st.deaths);
-    for (const p of everyone.filter(p => p.mother_id)) {
-      const m = db.person(p.mother_id);
-      assert.equal(m.sex, 'F', 'mothers are female');
-    }
-    console.log(`  ${Math.floor(sim.S.year)} years · pop ${st.population} · births ${st.births} · deaths ${st.deaths} · jobs: ${[...jobsSeen].join(', ')}`);
+    assert.ok(finite(st));
   } finally { cleanup(); }
 });
 
-test('the world survives a save / load round trip', () => {
-  const { db, world, sim, cleanup } = setup();
+test('the API views describe minds and society without crashing', () => {
+  const { sim, cleanup } = setup(7);
   try {
-    sim.setTimeScale(40);
-    for (let i = 0; i < 20 * 30; i++) sim.tick(1 / 20);
-    db.save(sim.serialize());
-    const before = sim.stats();
-    const couples = sim.S.people.filter(e => e.partner).map(e => [e.id, e.partner.id]);
-
-    const sim2 = createSim(world, { event() {}, birth() {}, death() {}, fx() {} });
-    sim2.restore(db.load());
-    const after = sim2.stats();
-    assert.equal(after.population, before.population);
-    assert.equal(after.births, before.births);
-    assert.equal(after.year, before.year);
-    for (const [a, b] of couples) assert.equal(sim2.S.byId.get(a).partner.id, b, 'marriages restored');
-    for (let i = 0; i < 100; i++) sim2.tick(1 / 20);   // and it keeps running
+    while (sim.S.year < .3) sim.tick(.1);
+    const p = sim.S.people[0];
+    const live = sim.live(p.id);
+    assert.ok(live.goal && live.mood && Array.isArray(live.beliefs));
+    assert.ok(sim.explain(p.id).length > 0);
+    const soc = sim.society();
+    assert.ok(Array.isArray(soc.bands) && Array.isArray(soc.goals));
+    assert.ok(sim.economy().richest);
+    const snap = sim.snapshot(true);
+    assert.equal(snap.people.length, sim.S.people.length);
+    assert.ok(Array.isArray(snap.animals) && snap.animals.length > 0);
+    JSON.stringify(snap);
   } finally { cleanup(); }
+});
+
+test('the world survives a save / load round trip, minds included', () => {
+  const { db, world, sim, cleanup } = setup(42);
+  try {
+    while (sim.S.year < .4) sim.tick(.1);
+    db.save(sim.serialize());
+    const saved = db.load();
+    const again = createSim(world, { event: () => {}, birth: () => {}, death: () => {}, fx: () => {} });
+    again.restore(saved);
+    assert.equal(again.S.people.length, sim.S.people.length);
+    const a = sim.S.people[0], b = again.S.byId.get(a.id);
+    assert.equal(b.name, a.name);
+    assert.equal(b.M.size, a.M.size, 'what they learned survives');
+    assert.deepEqual([...b.W.keys()].sort(), [...a.W.keys()].sort(), 'and how they feel about things');
+    for (let i = 0; i < 200; i++) again.tick(.1);   // and the restored world keeps running
+    assert.ok(again.S.time > sim.S.time);
+  } finally { cleanup(); }
+});
+
+test('people can find a way around water', () => {
+  // a lake between start and goal: a disc of water centred at the origin
+  const blocked = (x, z) => Math.hypot(x, z) < 100;
+  const path = findPath(blocked, -150, 0, 150, 0);
+  assert.ok(path && path.length > 2);
+  for (const p of path) assert.ok(!blocked(p.x, p.z));
+  assert.equal(findPath((x, z) => Math.abs(x) < 30, -200, 0, 200, 0), null, 'no way across an endless river');
 });

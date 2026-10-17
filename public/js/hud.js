@@ -5,42 +5,47 @@ import { api } from './net.js';
 
 export function nightAmount() { return 1 - smooth(-.15, .25, Math.sin(G.dayT * TAU)); }
 
+// Soft round glows are rendered once and stamped (creating gradients every frame is slow)
+function glowSprite(rgbStr) {
+  const c = document.createElement('canvas'), n = 64;
+  c.width = c.height = n * 2;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(n, n, 0, n, n, n);
+  gr.addColorStop(0, `rgba(${rgbStr},1)`); gr.addColorStop(.5, `rgba(${rgbStr},.5)`); gr.addColorStop(1, `rgba(${rgbStr},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, n * 2, n * 2);
+  return c;
+}
+const HOLE = glowSprite('0,0,0'), WARM = glowSprite('255,140,50'), FLY = glowSprite('220,255,140');
+const stampGlow = (g, img, x, y, r, a) => { if (r < .5 || a <= 0) return; g.globalAlpha = a; g.drawImage(img, x - r, y - r, r * 2, r * 2); };
+
+// Night: a dark layer (at a quarter of the screen resolution: it is all soft gradients) with holes for every light
 export function lighting(flies, lights, player) {
-  const { W, H, DPR } = G, Z = G.cam.zoom;
+  const { W, H } = G, Z = G.cam.zoom;
   const sunH = Math.sin(G.dayT * TAU), night = nightAmount(), dusk = Math.exp(-Math.pow(sunH / .25, 2));
   if (dusk > .02) { ctx.fillStyle = `rgba(255,140,70,${dusk * .13})`; ctx.fillRect(0, 0, W, H); }
   if (night > .02) {
-    dctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const q = dark.width / W;
+    dctx.setTransform(q, 0, 0, q, 0, 0);
     dctx.globalCompositeOperation = 'source-over';
+    dctx.globalAlpha = 1;
     dctx.clearRect(0, 0, W, H);
     dctx.fillStyle = `rgba(8,12,38,${night * .8})`;
     dctx.fillRect(0, 0, W, H);
     dctx.globalCompositeOperation = 'destination-out';
-    const hole = (x, y, r, a) => {
-      const g = dctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
-      dctx.fillStyle = g; dctx.beginPath(); dctx.arc(x, y, r, 0, TAU); dctx.fill();
-    };
     const [px, py] = proj(player.x, 20, player.z);
-    hole(px, py, 150 * Z, .75);
-    for (const f of flies) hole(f.sx, f.sy, 34 * Z, .6 * f.a);
-    for (const l of lights) hole(l.sx, l.sy, l.r, l.a);
+    stampGlow(dctx, HOLE, px, py, 150 * Z, .75);
+    for (const f of flies) stampGlow(dctx, HOLE, f.sx, f.sy, 34 * Z, .6 * f.a);
+    for (const l of lights) stampGlow(dctx, HOLE, l.sx, l.sy, l.r, l.a);
+    dctx.globalAlpha = 1;
     ctx.drawImage(dark, 0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';   // warm firelight tint
-    for (const l of lights) {
-      const g = ctx.createRadialGradient(l.sx, l.sy, 0, l.sx, l.sy, l.r * .8);
-      g.addColorStop(0, `rgba(255,140,50,${.22 * night})`); g.addColorStop(1, 'rgba(255,140,50,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(l.sx, l.sy, l.r * .8, 0, TAU); ctx.fill();
-    }
+    for (const l of lights) stampGlow(ctx, WARM, l.sx, l.sy, l.r * .8, .22 * night);
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
-  if (night > .1) {   // firefly sparks
+  if (night > .1 && flies.length) {   // firefly sparks
     ctx.globalCompositeOperation = 'lighter';
-    for (const f of flies) {
-      const g = ctx.createRadialGradient(f.sx, f.sy, 0, f.sx, f.sy, 9 * Z);
-      g.addColorStop(0, `rgba(220,255,140,${f.a * .7})`); g.addColorStop(1, 'rgba(220,255,140,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(f.sx, f.sy, 9 * Z, 0, TAU); ctx.fill();
-    }
+    for (const f of flies) stampGlow(ctx, FLY, f.sx, f.sy, 9 * Z, f.a * .7);
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
 }
@@ -126,15 +131,36 @@ export function pickHover() {
 
 function cardLines(d) {
   if (!d) return ['Loading…'];
+  if (!d.alive) return [d.name, `Died in year ${d.diedYear}${d.cause ? ` (${d.cause})` : ''} at ${d.age}`, d.role ? `Was a ${d.role}` : ''].filter(Boolean);
   const kids = d.children.length ? `Children: ${d.children.length} (${d.children.slice(0, 3).map(c => c.name.split(' ')[0]).join(', ')}${d.children.length > 3 ? '…' : ''})` : '';
+  const t = d.traits;
+  const temper = t && [t.iq > 70 && 'clever', t.iq < 30 && 'dim', t.temper > 65 && 'hot-headed', t.temper < 20 && 'gentle', t.empathy > 70 && 'kind',
+    t.empathy < 25 && 'cold-hearted', t.social > 70 && 'sociable', t.social < 25 && 'loner', t.curious > 70 && 'curious', t.greed > 70 && 'greedy'].filter(Boolean);
+  const n = d.needs, meter = v => v < 30 ? `${v}%!` : `${v}%`;
+  const carry = Object.entries(d.carrying || {});
   return [
     d.name,
-    `${d.sex} · ${d.age} yrs · ${d.stage}`,
-    d.alive ? `Doing: ${d.doing}` : `Died in year ${d.diedYear}`,
-    d.spouse ? `Spouse: ${d.spouse.name}` : d.courting ? `Courting ${d.courting}` : d.age >= 18 ? 'Single' : '',
+    `${d.sex} · ${d.age} yrs · ${d.stage}${d.role && d.role !== 'child' && d.role !== 'baby' ? ` · ${d.role}` : ''}${d.health < 70 ? ` · hurt (${d.health}%)` : ''}${d.bleeding ? ' · bleeding' : ''}`,
+    `Doing: ${d.doing}`,
+    `Purpose: ${d.goal.replace(/^to /, '')}`,
+    `Mood: ${d.mood}${d.sick ? ` · ${d.sick}` : ''}`,
+    n ? `Food ${meter(n.food)} · Water ${meter(n.water)} · Warmth ${meter(n.warmth)} · Energy ${meter(n.energy)}` : '',
+    d.loves && d.loves.length ? `Loves: ${d.loves.join(', ')}` : '',
+    d.hates && d.hates.length ? `Hates: ${d.hates.join(', ')}` : '',
+    ...(d.beliefs || []).slice(0, 4).map((b, i) => `${i ? '          ' : 'Believes: '}${b}`),
+    d.recipes && d.recipes.length ? `Can make: ${d.recipes.slice(0, 4).join(', ')}${d.recipes.length > 4 ? '…' : ''}` : '',
+    carry.length ? `Carries: ${carry.slice(0, 6).map(([k, v]) => `${v} ${k}`).join(', ')}${carry.length > 6 ? '…' : ''}` : 'Carries nothing',
+    d.faith ? `Faith: ${d.faith}` : d.sacred ? `Reveres ${d.sacred}` : '',
+    d.band ? `Band: ${d.band}` : '',
+    d.followers ? `👑 ${d.followers} follow ${d.sex === 'Male' ? 'him' : 'her'}` : '',
+    d.follows ? `Follows ${d.follows}` : '',
+    d.kills ? `⚔ Has killed ${d.kills}` : '',
+    d.thefts ? `🦹 Has stolen ${d.thefts} times` : '',
+    d.partner ? `Lover: ${d.partner}` : '',
     kids,
-    d.pregnantMonth ? `Pregnant · month ${d.pregnantMonth}` : '',
-    d.founder ? 'One of the village founders' : `Mother: ${d.mother ? d.mother.name : '?'} · Father: ${d.father ? d.father.name : '?'}`,
+    d.pregnant ? `Pregnant · month ${d.pregnant}` : '',
+    d.founder ? 'One of the founders' : `Mother: ${d.mother ? d.mother.name : '?'} · Father: ${d.father ? d.father.name : '?'}`,
+    temper && temper.length ? `Nature: ${temper.join(', ')}` : '',
   ].filter(Boolean);
 }
 
@@ -169,17 +195,69 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 export function startStatsPolling() {
   const poll = async () => {
     try {
-      const [s, ev] = await Promise.all([api('/stats'), api('/events?limit=6')]);
+      const [s, ev, evo] = await Promise.all([api('/stats'), api('/events?limit=6'), api('/evolve').catch(() => null)]);
+      const SEASON_ICON = { spring: '🌱', summer: '☀', autumn: '🍂', winter: '❄' };
+      const sep = ' &nbsp;·&nbsp; ';
       statsEl.innerHTML =
-        `<b>Year ${s.year}</b>${s.timeScale > 1 ? ` <b>(×${s.timeScale})</b>` : ''} &nbsp;·&nbsp; Population <b>${s.population}</b> (${s.men} men, ${s.women} women, ${s.minors} under 18) &nbsp;·&nbsp; ${s.couples} couples<br>` +
-        `Births <b>${s.births}</b> &nbsp;·&nbsp; Deaths <b>${s.deaths}</b> &nbsp;·&nbsp; 🫐 Food <b>${s.food}</b> &nbsp;·&nbsp; 🪵 Wood <b>${s.wood}</b> &nbsp;·&nbsp; 💧 Water <b>${s.water}</b>` +
-        (s.population === 0 ? ' &nbsp;·&nbsp; <b>The village has died out</b>' : '') +
+        `<b>Year ${s.year}</b> ${SEASON_ICON[s.season] || ''} ${s.season}${s.storm ? ' ⛈' : s.rain ? ' 🌧' : ''}${s.speed !== 1 ? `${sep}<b>${s.speed === 0 ? '⏸ paused' : `⏩ ×${s.speed}`}</b>` : ''}${sep}Population <b>${s.population}</b> (${s.men} men, ${s.women} women, ${s.minors} young)<br>` +
+        `👶 Births <b>${s.births}</b>${sep}✝ Deaths <b>${s.deaths}</b>${sep}⚔ Fights <b>${s.fights}</b>${s.killings ? ` (<b style="color:#ff9a8a">${s.killings} killed</b>)` : ''}${sep}🦹 Thefts <b>${s.thefts}</b>${sep}🎁 Gifts <b>${s.gifts}</b><br>` +
+        `💡 Inventions <b>${s.inventions}</b>${sep}🏠 Buildings <b>${s.buildings}</b>${sep}⚱ Graves <b>${s.graves}</b>${sep}☠ Bodies lying <b>${s.corpses}</b>${sep}🌱 Crops <b>${s.crops}</b>${sep}🐾 ${s.animals} animals${s.tame ? ` (${s.tame} tame)` : ''}<br>` +
+        `👥 Bands <b>${s.bands}</b>${sep}🙏 Faiths <b>${s.faiths}</b>${sep}🏘 Settlements <b>${s.settlements}</b>${s.wars ? `${sep}<b style="color:#ff9a8a">⚔ ${s.wars} war${s.wars > 1 ? 's' : ''}</b>` : ''}${s.wildfires ? `${sep}<b style="color:#ffb070">🔥 ${s.wildfires} burning</b>` : ''}` +
+        `${sep}👑 ${s.chief ? `<b>${esc(s.chief.name)}</b> (${s.chief.followers} follow)` : 'no leader'}` +
+        (s.hungry || s.thirsty || s.freezing || s.sick ? `<br><span style="color:#ffb3a0">${[s.hungry && `${s.hungry} hungry`, s.thirsty && `${s.thirsty} thirsty`, s.freezing && `${s.freezing} freezing`, s.sick && `${s.sick} sick${s.plague ? ` (${esc(s.plague.name)})` : ''}`].filter(Boolean).join(' · ')}</span>` : '') +
+        (s.population === 0 ? `${sep}<b>Everyone has died out</b>` : '') +
+        (evo && evo.running ? `<br><b style="color:#b9f0a8">🧬 Evolving: ${Math.floor(evo.done)}/${evo.total} worlds${evo.rounds > 1 ? ` · round ${evo.round}/${evo.rounds}` : ''}${evo.best ? ` · best so far ${evo.best.pop} alive` : ''}</b>` : '') +
         `<div class="log">${ev.map(e => `<div>${esc(e.text)}</div>`).join('')}</div>`;
     } catch { /* server unreachable: the status banner already says so */ }
   };
   poll();
   setInterval(poll, 1000);
 }
+// ───────── society panel (G): religions, clans, ideologies, technology — GET /api/society ─────────
+const socEl = document.getElementById('society');
+let socTimer = null;
+const bar = (n, max, color) => `<span class="bar"><span style="width:${Math.round(100 * n / Math.max(1, max))}%;background:${color}"></span></span>`;
+async function refreshSociety() {
+  try {
+    const s = await api('/society');
+    const faiths = s.faiths.filter(f => f.active), gone = s.faiths.filter(f => !f.active);
+    const maxF = Math.max(1, ...faiths.map(f => f.believers)), maxB = Math.max(1, ...s.bands.map(b => b.members));
+    const maxG = Math.max(1, ...s.goals.map(g => g.count)), maxR = Math.max(1, ...s.roles.map(r => r.count));
+    socEl.innerHTML =
+      `<h3>Bands</h3>` +
+      (s.bands.length ? s.bands.map(b => `<div class="row"><b style="color:${b.color}">■ ${esc(b.name)}</b> ${bar(b.members, maxB, b.color)} ${b.members}
+        <div class="sub">${b.chief ? `${esc(b.chief)} is followed by ${b.followers}` : 'nobody leads'} · since year ${b.year}</div></div>`).join('')
+        : '<div class="sub">No lasting friendships yet.</div>') +
+      (s.wars.length ? `<div class="row feud">${s.wars.map(w => `⚔ ${esc(w.a)} vs ${esc(w.b)} since year ${w.since} (${w.deaths} dead)`).join('<br>')}</div>` : '') +
+      `<h3>Faiths</h3>` +
+      (faiths.length ? faiths.map(f => `<div class="row"><b style="color:${f.color}">${f.symbol} ${esc(f.name)}</b> ${bar(f.believers, maxF, f.color)} ${f.faithful} pray · ${f.believers} believe
+        <div class="sub">reverence for ${esc(f.of)} · first prayed by ${esc(f.founder)} in year ${f.year}</div></div>`).join('')
+        : '<div class="sub">Nobody prays together (yet).</div>') +
+      (gone.length ? `<div class="sub">Forgotten: ${gone.map(f => `${f.symbol} ${esc(f.name)}`).join(', ')}</div>` : '') +
+      `<h3>What people live for</h3>` +
+      s.goals.map(g => `<div class="row">${esc(g.name)} ${bar(g.count, maxG, '#8fb0d8')} ${g.count}</div>`).join('') +
+      `<h3>What people actually do</h3>` +
+      s.roles.map(r => `<div class="row">${esc(r.name)} ${bar(r.count, maxR, '#c99ae8')} ${r.count}</div>`).join('') +
+      `<h3>Needs</h3>` +
+      `<div class="row">Food ${bar(s.needs.food, 100, '#d8344a')} ${s.needs.food}%</div>` +
+      `<div class="row">Water ${bar(s.needs.water, 100, '#4aa8d8')} ${s.needs.water}%</div>` +
+      `<div class="row">Warmth ${bar(s.needs.warmth, 100, '#f2862e')} ${s.needs.warmth}%</div>` +
+      `<h3>Discoveries</h3>` +
+      (s.knowledge.length ? s.knowledge.map(k => `<div class="row"${k.knowers ? '' : ' style="opacity:.55"'}><b>${k.knowers ? '✓' : '✝'} ${esc(k.name)}</b> ${bar(k.knowers, Math.max(1, k.of), k.knowers ? '#ffd36a' : '#777')} ${k.knowers}/${k.of}
+        <div class="sub">${esc(k.how)} · ${k.by === 'the ancestors' ? 'known since the beginning' : `found by ${esc(k.by)} in year ${k.year}`}${k.knowers ? '' : ' · forgotten'}</div></div>`).join('') : '<div class="sub">Nothing yet.</div>') +
+      (s.strains.length ? `<h3>Sicknesses</h3>` + s.strains.map(st => `<div class="row">${st.sick ? '🦠' : '·'} ${esc(st.name)}: ${st.sick} sick now, ${st.cases} ever${st.sick ? '' : ''}<div class="sub">deadliness ${st.deadly}% · appeared in year ${st.year}</div></div>`).join('') : '') +
+      (s.settlements.length ? `<h3>Settlements</h3>` + s.settlements.map(t => `<div class="row">🏘 ${esc(t.name)}: ${t.buildings} buildings, ${t.pop} people nearby<div class="sub">since year ${t.year}</div></div>`).join('') : '') +
+      `<h3>Animals</h3><div class="sub">${Object.entries(s.animals).map(([k, a]) => `${k}: ${a.wild}${a.tame ? ` (+${a.tame} tame)` : ''}`).join(' · ')}</div>` +
+      `<div class="sub" style="margin-top:8px">Fights ${s.fights} · killings ${s.killings} · thefts ${s.thefts} · gifts ${s.gifts}</div>`;
+  } catch { /* offline */ }
+}
+export function toggleSociety() {
+  const show = !socEl.classList.contains('show');
+  socEl.classList.toggle('show', show);
+  clearInterval(socTimer);
+  if (show) { refreshSociety(); socTimer = setInterval(refreshSociety, 2000); }
+}
+
 export function setOnline(on) {
   G.online = on;
   statusEl.textContent = on ? '' : 'Server offline — reconnecting…';
