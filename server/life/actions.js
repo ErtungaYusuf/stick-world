@@ -9,8 +9,13 @@ export const BUILD = {
   hut: { stick: 4 }, house: { stick: 2, stone: 4 }, store: { stick: 3 }, wall: { stone: 3 },
   totem: { stick: 2 }, pen: { stick: 4 }, dam: { stone: 3, stick: 2 },
   furnace: { stone: 4, clay: 3 },   // a clay-lined stone shaft: holds the heat that smelting needs
+  well: { stone: 4 },               // water anywhere, and clean
+  hall: { brick: 6, stick: 3 },     // a great brick house
+  granary: { brick: 4, stick: 2 },  // a store that keeps
+  stele: { stone: 2, tablet: 2 },   // a standing stone to carve what one knows into
+  snare: { trap: 1 },               // set in the grass, catches small game by itself
 };
-export const BUILD_T = { hut: 18, house: 30, store: 14, wall: 12, totem: 10, pen: 16, dam: 20, furnace: 22 };
+export const BUILD_T = { hut: 18, house: 30, store: 14, wall: 12, totem: 10, pen: 16, dam: 20, furnace: 22, well: 20, hall: 40, granary: 24, stele: 14, snare: 2 };
 const PICK_YIELD = { bush: ['berry', 3], tree: ['fruit', 3], mushroom: ['mushroom', 1], redcap: ['redcap', 1], herb: ['herb', 2], grass: ['fiber', 2], reed: ['fiber', 2] };
 const GATHER = { shrub: 'stick', tree: 'stick', pine: 'stick', rock: 'stone', 'ore:copper': 'ore:copper', 'ore:iron': 'ore:iron', 'ore:gold': 'ore:gold', 'ore:sulfur': 'sulfur',
   'ore:tin': 'ore:tin', 'ore:saltpeter': 'saltpeter' };
@@ -49,7 +54,7 @@ export function createActions(x) {
   def({ id: 'sleep', minAge: 0, reach: 6, dur: () => 30, label: () => 'Sleeping', anim: () => 'sleep',
     cands(e, P, out) {
       out.push(C(this, 'ground', { here: true }));
-      for (const c of ['hut', 'house']) { const v = vis(e, c)[0]; push(out, v ? C(this, c, { tgt: v.o, ...at(e, v.o) }) : memC(this, e, c)); }
+      for (const c of ['hut', 'house', 'hall']) { const v = vis(e, c)[0]; push(out, v ? C(this, c, { tgt: v.o, ...at(e, v.o) }) : memC(this, e, c)); }
     },
     work(e, T) { e.asleep = true; if (e.energy >= .98 && T.t > 6) return 'done'; },
     // a good night under one's own roof is pinned on having built it
@@ -60,11 +65,14 @@ export function createActions(x) {
     cands(e, P, out) {
       if (P.shore) out.push(C(this, 'river', { x: P.shore.x, z: P.shore.z, d: P.shore.d }));
       else push(out, memC(this, e, 'river'));
-      if (x.has(e, 'waterpot')) out.push(C(this, 'waterpot', { item: 'waterpot', here: true }));
+      const w = vis(e, 'well').find(t => x.done(t.o));
+      if (w) out.push(C(this, 'well', { tgt: w.o, well: true, ...at(e, w.o) }));
+      for (const k in e.inv) if (e.inv[k] > 0 && ITEMS[k] && ITEMS[k].drink) out.push(C(this, k, { item: k, here: true }));
     },
-    begin: (e, T) => T.item ? x.has(e, 'waterpot') : true,
+    begin: (e, T) => T.item ? x.has(e, T.item) : true,
     finish(e, T) {
-      if (T.item) { x.take(e, 'waterpot'); x.add(e, 'pot'); e.water = Math.min(1, e.water + .5); return; }
+      if (T.item) { x.drinkItem(e, T.item); return; }
+      if (T.well) { e.water = Math.min(1, e.water + .55); return; }
       e.water = Math.min(1, e.water + .55);
       if (env.frozenAt(T.x, T.z)) e.warmth = Math.max(0, e.warmth - .08);   // ice water chills
       const g = env.waterGerm(T.x, T.z);
@@ -101,7 +109,7 @@ export function createActions(x) {
       if (T.crop) return x.harvestCrop(e, T.tgt);
       const [item, n] = PICK_YIELD[T.k];
       env.harvest(T.tgt);
-      x.add(e, item, n);
+      x.add(e, item, n + (x.has(e, 'basket') ? 1 : 0));
       if (T.k === 'grass' && env.season() !== 0 && rnd() < .5) x.add(e, 'grain');
     } });
 
@@ -127,7 +135,9 @@ export function createActions(x) {
     },
     finish(e, T) {
       const o = T.tgt, item = GATHER[T.k];
-      if (item === 'stick') { if (env.sticksLeft(o) < 1) return false; env.takeStick(o); x.add(e, 'stick'); if (T.k === 'pine' && rnd() < .3) x.add(e, 'resin'); return; }
+      if (item === 'stick') { if (env.sticksLeft(o) < 1) return false; env.takeStick(o); x.add(e, 'stick'); if (T.k === 'pine' && rnd() < .3) x.add(e, 'resin');
+        if (T.k === 'tree' && rnd() < .04) { x.add(e, 'honey'); x.hurtPerson(e, .03, null, 'stings'); x.first('honey', 'discovery', `🍯 ${e.name} found a wild hive (and was stung)`); }
+        return; }
       if (item === 'stone') { x.add(e, rnd() < .2 ? 'flint' : 'stone'); return; }
       if (env.oreLeft(o) <= 0) return false;
       if (rnd() < (x.best(e, 'dig') ? .85 : .35)) {
@@ -145,7 +155,7 @@ export function createActions(x) {
     finish(e, T) {
       if (T.tgt.felled) return false;
       env.fell(T.tgt);
-      x.add(e, 'stick', 4);
+      x.add(e, 'stick', 4); x.add(e, 'bark');
       x.fx({ kind: 'fell', id: T.tgt.id, x: T.tgt.x, z: T.tgt.z, dir: T.tgt.x >= e.x ? 1 : -1 });   // it falls away from the axe
       x.harm(e, T.k, .7, T.tgt);
       x.first('chop', 'work', `🪓 ${e.name} felled a tree for the first time`);
@@ -180,7 +190,14 @@ export function createActions(x) {
     speed: (e, T) => T.tgt.state === 'flee' || T.tgt.state === 'fight' ? 'run' : 'sneak',
     label: (e, T) => `Hunting a ${T.k}`, anim: () => 'fight', tool: e => x.weaponOf(e),
     cands(e, P, out) {
-      for (const { a, d } of P.animals.slice(0, 3)) if (!a.owner || a.owner === e.id) out.push(C(this, a.k, { tgt: a, x: a.x, z: a.z, d }));
+      // going for a beast that is mauling someone, or one others are already fighting, is learned as its own thing:
+      // whether standing together against wolves pays is for them to find out
+      for (const { a, d } of P.animals.slice(0, 3)) {
+        if (a.owner && a.owner !== e.id) continue;
+        const mauling = a.state === 'fight' && a.threat && a.threat !== e && a.threat.name;
+        const together = P.people.some(s => s.p.task && s.p.task.A.id === 'hunt' && s.p.task.tgt === a);
+        out.push(C(this, a.k, { tgt: a, cat: a.k + (mauling ? ' attacking someone' : together ? ' with others' : ''), x: a.x, z: a.z, d }));
+      }
     },
     begin: (e, T) => S.animals.includes(T.tgt),
     work(e, T, dt) {
@@ -220,7 +237,10 @@ export function createActions(x) {
   def({ id: 'attack', minAge: 5, val: -1, mobile: true, reach: e => x.reachOf(e), dur: () => 20, speed: () => 'run',
     label: (e, T) => T.tgt.downUntil > S.time ? `Beating ${T.tgt.name}, who is down` : `Fighting ${T.tgt.name}`, anim: () => 'fight', tool: e => x.weaponOf(e),
     cands(e, P, out) {
-      for (const { p, d } of people(e, P, 3, p => !p.held)) out.push(C(this, 'p:' + p.id, { tgt: p, p, cat: catOf(p), x: p.x, z: p.z, d }));
+      for (const { p, d } of people(e, P, 3, p => !p.held)) {
+        const many = P.people.some(s => s.p !== e && s.p.task && s.p.task.A.id === 'attack' && s.p.task.tgt === p);
+        out.push(C(this, 'p:' + p.id, { tgt: p, p, cat: many ? 'outnumbered' : catOf(p), x: p.x, z: p.z, d }));
+      }
       for (const { p, d } of P.strangers || []) out.push(C(this, 'p:' + p.id, { tgt: p, cat: 'stranger', x: p.x, z: p.z, d }));
     },
     begin(e, T) { if (T.tgt.downUntil > S.time) T.finishing = true; return T.tgt.alive; },   // going for someone already down
@@ -289,6 +309,87 @@ export function createActions(x) {
     finish(e, T) { x.teach(e, T.tgt); } });
 
   // only ever the other half of someone else's "teach"
+  // ───────── power: demanding, giving in, refusing ─────────
+  def({ id: 'demand', minAge: 14, reach: 12, val: -1, mobile: true, dur: () => 1.6, speed: (e, T) => Math.hypot(T.x - e.x, T.z - e.z) > 25 ? 'run' : 'walk', anim: () => 'command', label: (e, T) => `Demanding goods from ${T.tgt.name}`,
+    cands(e, P, out) { for (const { p, d } of people(e, P, 2, p => p.age >= 6 && !p.held && !p.asleep && x.invTotal(p) > 0)) out.push(C(this, 'p:' + p.id, { tgt: p, p, cat: catOf(p), x: p.x, z: p.z, d })); },
+    begin(e, T) {
+      if (!T.tgt.alive || T.tgt.held) return false;
+      T.choice = x.decideYield(T.tgt, e);
+      x.join(T.tgt, e, T.choice, 1.6, true);
+      return true;
+    },
+    finish(e, T) { if (!T.tgt.alive) return false; if (T.choice === 'yield') { x.tribute(e, T.tgt); return true; } x.refused(e, T.tgt); return false; } });
+  def({ id: 'yield', minAge: 2, joinOnly: true, val: 1, dur: () => 1.6, anim: () => 'give', label: (e, T) => `Handing things over to ${T.tgt.name}`, cands() {} });
+  def({ id: 'refuse', minAge: 2, joinOnly: true, val: -1, dur: () => 1.6, anim: () => 'argue', label: (e, T) => `Refusing ${T.tgt.name}`, cands() {} });
+
+  // ───────── trade: something I want less for something I want more (if they see it the other way round) ─────────
+  def({ id: 'trade', minAge: 10, reach: 12, val: 1, mobile: true, dur: () => 3, speed: (e, T) => Math.hypot(T.x - e.x, T.z - e.z) > 25 ? 'run' : 'walk', anim: () => 'give', label: (e, T) => `Trading ${label(T.give)} for ${label(T.get)} with ${T.tgt.name}`,
+    cands(e, P, out) {
+      if (x.invTotal(e) < 2) return;
+      for (const { p, d } of people(e, P, 2, p => p.age >= 10 && !p.held && !p.asleep && x.invTotal(p) > 0)) {
+        const deal = x.dealWith(e, p);
+        if (deal) out.push(C(this, 'p:' + p.id, { tgt: p, p, cat: catOf(p), give: deal.give, get: deal.get, x: p.x, z: p.z, d }));
+      }
+    },
+    begin(e, T) { return x.has(e, T.give) && x.has(T.tgt, T.get) && !T.tgt.asleep && x.acceptsDeal(T.tgt, e, T.get, T.give) && x.join(T.tgt, e, 'give', 3, true); },
+    finish(e, T) { return x.swap(e, T.tgt, T.give, T.get); } });
+
+  // ───────── music: a drum or a flute; everyone around feels it ─────────
+  def({ id: 'play', minAge: 6, reach: 0, val: 1, dur: () => 8, label: (e, T) => `Playing the ${T.item}`, anim: (e, T) => T.item === 'drum' ? 'drum' : 'flute',
+    cands(e, P, out) { const k = x.has(e, 'drum') ? 'drum' : x.has(e, 'flute') ? 'flute' : null; if (k) out.push(C(this, 'music', { item: k, here: true })); },
+    begin: (e, T) => x.has(e, T.item),
+    finish(e, T) { x.music(e, T.item); } });
+
+  // ───────── herds: milk and wool from goats that trust you ─────────
+  def({ id: 'milk', minAge: 8, reach: 10, val: 1, mobile: true, dur: () => 4, anim: () => 'pick', label: () => 'Milking a goat',
+    cands(e, P, out) {
+      const a = P.animals.find(({ a }) => a.k === 'goat' && (a.owner === e.id || (a.trust[e.id] || 0) >= .4) && !(S.time - (a.milkT || -999) < 90) && a.age > 1.5);
+      if (a) out.push(C(this, 'goat', { tgt: a.a, x: a.a.x, z: a.a.z, d: a.d }));
+    },
+    begin: (e, T) => S.animals.includes(T.tgt),
+    finish(e, T) { T.tgt.milkT = S.time; x.add(e, 'milk'); x.first('milk', 'herding', `🥛 ${e.name} milked a goat`); } });
+  def({ id: 'shear', minAge: 10, reach: 10, val: 1, mobile: true, dur: () => 5, anim: () => 'chop', label: () => 'Shearing a goat', tool: () => 'blade',
+    cands(e, P, out) {
+      if (!x.best(e, 'cut')) return;
+      const y = Math.floor(S.year);
+      const a = P.animals.find(({ a }) => a.k === 'goat' && (a.owner === e.id || (a.trust[e.id] || 0) >= .4) && a.shornY !== y && a.age > 1);
+      if (a) out.push(C(this, 'goat', { tgt: a.a, x: a.a.x, z: a.a.z, d: a.d }));
+    },
+    begin: (e, T) => S.animals.includes(T.tgt),
+    finish(e, T) { T.tgt.shornY = Math.floor(S.year); x.add(e, 'wool', 2); x.first('wool', 'herding', `🐐 ${e.name} sheared a goat for its wool`); } });
+
+  // ───────── writing: carving what one knows into a standing stone, and reading it ─────────
+  def({ id: 'inscribe', minAge: 12, reach: 12, val: 1, dur: () => 7, anim: () => 'craft', label: () => 'Carving signs into the stone',
+    cands(e, P, out) {
+      const st = vis(e, 'stele').find(t => x.done(t.o));
+      if (!st) return;
+      const lore = st.o.lore || [];
+      const rk = [...e.R.entries()].find(([k, r]) => r.ok && !lore.includes(k));
+      if (rk) out.push(C(this, 'stele', { tgt: st.o, rk: rk[0], ...at(e, st.o) }));
+    },
+    finish(e, T) { x.inscribe(e, T.tgt, T.rk); } });
+  def({ id: 'study', minAge: 6, reach: 12, val: 1, dur: () => 8, anim: () => 'pray', label: () => 'Studying the carved stone',
+    cands(e, P, out) {
+      const st = vis(e, 'stele').find(t => x.done(t.o) && (t.o.lore || []).some(k => !(e.R.get(k) || {}).ok));
+      if (st) out.push(C(this, 'stele', { tgt: st.o, ...at(e, st.o) }));
+    },
+    finish(e, T) { return x.study(e, T.tgt); } });
+
+  // ───────── planting trees: a seed in a stump; a seed where a wild plant died ─────────
+  def({ id: 'sow', minAge: 8, reach: 10, val: 1, dur: () => 3, anim: () => 'plant', label: (e, T) => T.k === 'stump' ? 'Planting a tree' : 'Planting a bush again',
+    cands(e, P, out) {
+      const seed = x.has(e, 'seed') ? 'seed' : x.has(e, 'fruit') ? 'fruit' : x.has(e, 'berry') ? 'berry' : null;
+      if (!seed) return;
+      for (const c of ['stump', 'withered']) { const v = vis(e, c)[0]; if (v) out.push(C(this, c, { tgt: v.o, item: seed, ...at(e, v.o) })); }
+    },
+    begin: (e, T) => x.has(e, T.item),
+    finish(e, T) {
+      const ok = T.k === 'stump' ? env.plantTree(T.tgt) : env.replant(T.tgt);
+      if (!ok) return false;
+      x.take(e, T.item); e.stats.planted++;
+      x.first('tree:' + T.k, 'farming', T.k === 'stump' ? `🌳 ${e.name} planted a tree where one had been cut` : `🌱 ${e.name} planted a dead bush again`);
+    } });
+
   def({ id: 'listen', minAge: 2, joinOnly: true, dur: () => 6, anim: () => 'sit', label: (e, T) => `Listening to ${T.tgt.name}`, cands() {} });
 
   def({ id: 'mate', minAge: 16, reach: 10, val: 1, mobile: true, dur: () => 8, anim: () => 'love', label: (e, T) => `Making love with ${T.tgt.name}`,

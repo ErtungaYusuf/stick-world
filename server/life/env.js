@@ -8,6 +8,10 @@ export const SEASON_NAMES = ['spring', 'summer', 'autumn', 'winter'];
 const ROT_PERSON = 540, ROT_ANIMAL = 300;          // seconds until a body is bare bones
 // seconds until a wild plant bears again after being picked bare: about one season for berries and herbs, more for fruit
 const REGROW = { bush: 100, tree: 160, mush: 120, redcap: 120, herb: 120, tall: 40, reed: 40 };
+// stripping a wild plant bare can kill it (roots torn, nothing left to seed); seeds blown in bring it back, slowly
+const DIE = { bush: .3, mush: .45, redcap: .45, herb: .35, tree: 0, tall: 0, reed: 0 };
+const REVIVE = .12;                 // chance per year that a dead wild plant comes back by itself
+const TREE_SEED = .035;             // chance per year that a stump left alone sprouts a seedling (after 15 years)
 const IN_SEASON = { bush: [0, 1, 2], tree: [1, 2], mush: [0, 1, 2], redcap: [0, 1, 2], herb: [0, 1, 2], tall: [0, 1, 2, 3], reed: [0, 1, 2, 3] };
 export const BURNABLE = { hut: true, store: true, totem: true, pen: true };
 export const STRUCT_SOLID = { wall: 10 };
@@ -35,18 +39,32 @@ export function createEnv(world, S, x) {
   // ───────── time of year, weather, temperature ─────────
   const yearFrac = () => frac(S.time / YEAR);
   const season = () => Math.floor(yearFrac() * 4);
-  const seasonTemp = () => .19 * Math.cos(TAU * (yearFrac() - .375)) - .07;   // +0.12 midsummer … −0.26 midwinter
+  // +0.12 midsummer … −0.26 midwinter, and some winters far colder than that
+  const seasonTemp = () => .19 * Math.cos(TAU * (yearFrac() - .375)) - .07 - (season() === 3 ? S.winterSev || 0 : 0);
   const night = () => 1 - smooth(-.15, .25, Math.sin(S.dayT * TAU));
   const airTemp = (px, pz) => world.temp(px, pz) + seasonTemp() - night() * .08 - S.weather.rain * .07;
   const frozenAt = (px, pz) => world.temp(px, pz) + seasonTemp() < world.SNOW - .1;
   const growing = () => season() !== 3;
 
+  // each winter is rolled as it comes: most are ordinary, some hard, a few terrible
+  function winter() {
+    const y = Math.floor(S.time / YEAR);
+    if (season() !== 3) { if (S.winterSev && season() === 0) { S.winterSev = 0; } return; }
+    if (S.winterYear === y) return;
+    S.winterYear = y;
+    const r = rnd();
+    S.winterSev = r < .035 ? .2 + rnd() * .08 : r < .2 ? .08 + rnd() * .06 : 0;
+    if (S.winterSev >= .2) x.log('winter', `❄ The Great Winter of year ${y}: rivers freeze, the snow does not stop`);
+    else if (S.winterSev > 0) x.log('winter', `❄ A hard winter has come (year ${y})`);
+  }
   function weather(dt) {
+    winter();
     const w = S.weather;
     if ((w.t -= dt) > 0) return;
     const s = season();
     w.rain = rnd() < [.4, .22, .45, .3][s] ? .35 + rnd() * .65 : 0;
     w.storm = w.rain > .75 && s !== 3 && rnd() < .45;
+    if (s === 3 && S.winterSev > .15) w.rain = Math.max(w.rain, .5 + rnd() * .5);   // blizzards
     w.t = 25 + rnd() * 70;
   }
 
@@ -79,13 +97,19 @@ export function createEnv(world, S, x) {
   function ensureSt(o) { let s = S.plants.get(o.id); if (!s) S.plants.set(o.id, s = {}); return s; }
   function ripe(o) {
     if (o.felled || o.burning) return false;
+    if (o.dead) return false;
     if (o.t === 'bush' && !o.canBerry) return false;
     const ss = IN_SEASON[o.t];
     if (!ss || !ss.includes(season())) return false;
     const s = stOf(o);
     return !s || !s.next || s.next <= S.time;
   }
-  function harvest(o) { ensureSt(o).next = S.time + REGROW[o.t] * (.8 + rnd() * .4); S.plantVer++; }
+  function harvest(o) {
+    const s = ensureSt(o);
+    s.next = S.time + REGROW[o.t] * (.8 + rnd() * .4) * (o.t === 'bush' || o.t === 'herb' ? 1 + S.winterSev * 4 : 1);
+    if (!s.tended && rnd() < (DIE[o.t] || 0)) { s.dead = S.time; o.dead = true; }
+    S.plantVer++;
+  }
   // sticks: a tree only sheds a few dry branches at a time
   function sticksLeft(o) {
     const s = stOf(o), cap = o.t === 'twig' ? 2 : 3;
@@ -107,23 +131,32 @@ export function createEnv(world, S, x) {
   // felled trees sprout again after years; restored state must be re-applied to the cached world objects
   function regrowYearly() {
     for (const [id, s] of S.plants) {
+      const o = objById(id);
       if (s.felled != null) {
-        const age = (S.time - s.felled) / YEAR, o = objById(id);
-        if (age > 20) { if (o) o.felled = false; delete s.felled; delete s.burnt; S.felledVer++; }
+        const age = (S.time - s.felled) / YEAR;
+        if (s.planted == null && age > 15 && rnd() < TREE_SEED) { s.planted = S.time; S.felledVer++; }
+        if (s.planted != null && (S.time - s.planted) / YEAR > 12) { if (o) o.felled = false; delete s.felled; delete s.burnt; delete s.planted; S.felledVer++; }
         else if (o) o.felled = true;
       }
-      if (s.spent) { const o = objById(id); if (o) o.ore = null; }
-      if (s.felled == null && !s.spent && (s.next == null || s.next < S.time) && (s.sticks == null || S.time - s.stickT > 200)) S.plants.delete(id);
+      if (s.dead != null) {
+        if (rnd() < REVIVE || (s.tended && rnd() < .5)) { delete s.dead; if (o) o.dead = false; S.plantVer++; }
+        else if (o) o.dead = true;
+      }
+      if (s.spent && o) o.ore = null;
+      if (s.felled == null && s.dead == null && !s.spent && (s.next == null || s.next < S.time) && (s.sticks == null || S.time - s.stickT > 200)) S.plants.delete(id);
     }
   }
+  // a seed pushed into a stump (or into the ground where a wild plant died)
+  function plantTree(o) { const s = ensureSt(o); if (s.felled == null || s.planted != null) return false; s.planted = S.time; S.felledVer++; return true; }
+  function replant(o) { const s = ensureSt(o); if (s.dead == null) return false; s.tended = true; return true; }
   function felledList() {
     const out = [];
-    for (const [id, s] of S.plants) if (s.felled != null) out.push({ id, stage: (S.time - s.felled) / YEAR > 8 ? 'sapling' : s.burnt ? 'burnt' : 'stump' });
+    for (const [id, s] of S.plants) if (s.felled != null) out.push({ id, stage: s.planted != null && (S.time - s.planted) / YEAR > 2 ? 'sapling' : s.burnt ? 'burnt' : 'stump' });
     return out;
   }
   function pickedIds() {
     const out = [];
-    for (const [id, s] of S.plants) if (s.next > S.time) out.push(id);
+    for (const [id, s] of S.plants) if (s.next > S.time || s.dead != null) out.push(s.dead != null ? '!' + id : id);
     return out;
   }
 
@@ -252,8 +285,9 @@ export function createEnv(world, S, x) {
   function shelterAt(px, pz) {
     let b = 0;
     for (const s of S.structs) {
-      if ((s.k !== 'hut' && s.k !== 'house') || (s.prog ?? 1) < 1) continue;
-      if (Math.abs(s.x - px) < 18 && Math.abs(s.z - pz) < 18) b = Math.max(b, s.k === 'house' ? .45 : .32);
+      if ((s.k !== 'hut' && s.k !== 'house' && s.k !== 'hall') || (s.prog ?? 1) < 1) continue;
+      const r = s.k === 'hall' ? 28 : 18;
+      if (Math.abs(s.x - px) < r && Math.abs(s.z - pz) < r) b = Math.max(b, s.k === 'hall' ? .55 : s.k === 'house' ? .45 : .32);
     }
     return b;
   }
@@ -272,7 +306,7 @@ export function createEnv(world, S, x) {
 
   return {
     season, seasonTemp, night, airTemp, frozenAt, growing, nearestShore, ripe, harvest, sticksLeft, takeStick, fell,
-    oreLeft, takeOre, objById, regrowYearly, felledList, pickedIds, makeFire, igniteTree, igniteStruct, treesNear, fireWarmth,
+    oreLeft, takeOre, objById, regrowYearly, plantTree, replant, felledList, pickedIds, makeFire, igniteTree, igniteStruct, treesNear, fireWarmth,
     rotOf, smellAt, newStrain, corpseStrain, infect, exposure, waterGerm, shelterAt, damNear, cropRipe, tick, perSecond,
   };
 }

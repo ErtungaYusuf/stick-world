@@ -1,5 +1,5 @@
 // Boot, input, game loop and frame composition.
-import { TAU, clamp, lerp, smooth, damp, mixc } from '/shared/core.js';
+import { TAU, clamp, lerp, smooth, damp, mixc, rgb } from '/shared/core.js';
 import { createWorld } from '/shared/world.js';
 import { G, cv, ctx, dark, resize, proj, seasonTemp } from './state.js';
 import { api, connect } from './net.js';
@@ -10,7 +10,7 @@ import { drawFigure, newBody } from './figure.js';
 import { puff, P, updatePlayer, applySnapshot, updatePeople, updateEffects, handleFx, hsl, growth } from './entities.js';
 import { toggleTerminal, isTyping } from './terminal.js';
 import { updateSound, toggleMute } from './sound.js';
-import { onMe, attach, token, toggleBag, bagOpen, send, mouseGround } from './player.js';
+import { onMe, attach, token, toggleBag, bagOpen, send, mouseGround, onClick, onRightClick, hotbarKey, updateHint, closeMenu } from './player.js';
 import { nightAmount, lighting, drawHearts, drawBubbles, drawCompass, pickHover, drawTooltip, startStatsPolling, setOnline, toggleSociety } from './hud.js';
 
 // ───────── input ─────────
@@ -34,7 +34,8 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyR' && !e.repeat) { send({ a: 'strike' }); P.strikeT = .4; }
   if (e.code === 'KeyQ' && !e.repeat) { const m = mouseGround(); send({ a: 'throw', x: m.x, z: m.z }); }
   if ((e.code === 'KeyI' || e.code === 'Tab') && !e.repeat) { e.preventDefault(); toggleBag(); }
-  if (e.code === 'Escape' && bagOpen()) toggleBag(false);
+  if (e.code === 'Escape') { if (bagOpen()) toggleBag(false); closeMenu(); G.held = null; }
+  if (/^Digit[1-9]$/.test(e.code) && !e.repeat) hotbarKey(+e.code.slice(5) - 1);
   if (e.code === 'KeyF' && !e.repeat) { G.director = !G.director; G.dirT = 0; if (!G.director) G.follow = null; banner(G.director ? '🎥 Watching the action — F to stop' : ''); }
   if (e.code === 'KeyM' && !e.repeat) banner(toggleMute() ? '🔇 Sound off — M' : '🔊 Sound on — M', 1.6);
   if (e.code === 'Equal' || e.code === 'NumpadAdd') G.cam.tz = clamp(G.cam.tz * 1.25, .4, 3.4);
@@ -45,7 +46,9 @@ addEventListener('keyup', e => { G.keys[e.code] = false; if (e.code === 'KeyT') 
 addEventListener('blur', () => { for (const k in G.keys) G.keys[k] = false; setFast(false); });
 addEventListener('wheel', e => { e.preventDefault(); G.cam.tz = clamp(G.cam.tz * Math.exp(-e.deltaY * .0012), .4, 3.4); }, { passive: false });
 addEventListener('mousemove', e => { G.mouse.x = e.clientX; G.mouse.y = e.clientY; });
-cv.addEventListener('click', () => { G.follow = G.hovered; });
+// the mouse: click to walk / use / talk / give, right-click to strike (see player.js)
+cv.addEventListener('click', ev => onClick(ev));
+cv.addEventListener('contextmenu', ev => onRightClick(ev));
 addEventListener('resize', resize);
 
 // the dead lie where they fell: a body that pales, darkens and turns to bones
@@ -63,6 +66,14 @@ function corpseBody(c) {
   return b;
 }
 function drawCorpse(c) {
+  if (G.cam.zoom < .9 && c.rot > .05) {
+    const [sx, sy] = proj(c.x, 1.5, c.z), Z = G.cam.zoom, s = growth(c.age) * (c.tall || 1), dx = Math.cos(c.h) * 11 * s * Z, dy = Math.sin(c.h) * 11 * s * Z * .62;
+    ctx.strokeStyle = c.rot > 1 ? 'rgba(228,222,205,.8)' : rgb(mixc(hsl(c.hue, .32, .24), [90, 110, 80], smooth(.15, .7, c.rot) * .7));
+    ctx.lineWidth = Math.max(1.2, 4.2 * s * Z); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(sx - dx, sy - dy); ctx.lineTo(sx + dx, sy + dy); ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(sx + dx * 1.35, sy + dy * 1.35, 4.5 * s * Z, 0, 7); ctx.fill();
+    return;
+  }
   const b = corpseBody(c), r = c.rot;
   if (b.fallT < 1.2) {
     b.fallT += G.lastDt;
@@ -165,6 +176,11 @@ function render() {
     ctx.fillStyle = `rgba(${p.col},${(1 - k) * .7})`;
     ctx.beginPath(); ctx.arc(x, y, p.r * (1 + k * .8) * G.cam.zoom, 0, 7); ctx.fill();
   }
+  if (G.clickMark && G.time - G.clickMark.t < .6) {
+    const k = (G.time - G.clickMark.t) / .6, [mx, my] = proj(G.clickMark.x, 0, G.clickMark.z), Z = G.cam.zoom;
+    ctx.strokeStyle = `rgba(255,240,200,${1 - k})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(mx, my, (6 + k * 10) * Z, (6 + k * 10) * Z * .62, 0, 0, 7); ctx.stroke();
+  }
   // bombs: an arc through the air, then a fizzing fuse on the ground
   for (const bm of G.throws) {
     const u = Math.min(1, bm.t / bm.fly);
@@ -188,8 +204,8 @@ function render() {
   mark("sort");
   for (const o of list) {
     switch (o.t) {
-      case 'player': drawFigure(P, { ink: COL.ink, marker: true }); break;
-      case 'person': drawFigure(o.v, { ink: o.v.ink, female: o.v.net.sex === 'F', preg: !!o.v.net.preg, band: G.bands[o.v.net.grp], items: o.v.items, fol: o.v.fol, chief: G.chiefs.has(o.v.id), load: o.v.load }); break;
+      case 'player': drawFigure(P, { ink: COL.ink, marker: true, boat: P.sailing }); break;
+      case 'person': drawFigure(o.v, { boat: !!o.v.net.sail, ink: o.v.ink, female: o.v.net.sex === 'F', preg: !!o.v.net.preg, band: G.bands[o.v.net.grp], items: o.v.items, fol: o.v.fol, chief: G.chiefs.has(o.v.id), load: o.v.load }); break;
       case 'animal': drawAnimal(o.v); break;
       case 'corpse': if (o.c.k === 'person') drawCorpse(o.c); else drawCarcass(o.c); break;
       case 'struct': drawStruct(o.s); break;
@@ -348,6 +364,7 @@ function frame(now) {
   updateEffects(dt);
   direct(dt);
   updateSound(dt, nightAmount() > .5);
+  updateHint();
   syncFelled();
   // send our position to the server ~10×/s (other players see us)
   if ((sendT += dt) > .1 && net) { sendT = 0; net.send({ t: 'player', x: P.x, z: P.z, h: P.heading, y: P.y, vx: P.vx, vz: P.vz }); }

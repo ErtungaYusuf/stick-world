@@ -43,4 +43,4 @@ export function proj(x, y, z) {
 
 // the same seasonal temperature curve as the server (0 spring … 3 winter)
 export const yearFrac = () => (G.season + G.sf) / 4;
-export const seasonTemp = () => .19 * Math.cos(Math.PI * 2 * (yearFrac() - .375)) - .07;
+export const seasonTemp = () => .19 * Math.cos(Math.PI * 2 * (yearFrac() - .375)) - .07 - (G.season === 3 ? G.winterSev || 0 : 0);

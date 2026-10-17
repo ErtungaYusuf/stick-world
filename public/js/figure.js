@@ -109,6 +109,9 @@ function actArms(mode, i, tt) {
     case 'beg': { const w = Math.sin(tt * 3) * .08; return [1.55 + w, 1.95 + w]; }                            // open palms raised
     case 'command': return i === 0 ? [2 + Math.sin(tt * 4) * .15, 2.05] : [.35, 1.9];                       // pointing, other hand on hip
     case 'wave': return i === 0 ? [2.6, 2.9 + Math.sin(tt * 11) * .45] : [.05, .15];
+    case 'drum': { const k = Math.max(0, Math.sin(tt * 9 + i * Math.PI)); return [.85 + k * .7, 1.1 + k * .5]; }        // beating the drum in the lap
+    case 'flute': { const w = Math.sin(tt * 6 + i) * .04; return i === 0 ? [1.35 + w, 2.55] : [1.25 - w, 2.7]; }      // both hands at the mouth
+    case 'row': { const k = Math.sin(tt * 3.2); return [1.15 + k * .45, 1.5 - k * .3]; }                              // pulling the paddle
     case 'scratch': return i === 0 ? [2.25, 3.3 + Math.sin(tt * 14) * .08] : [.05, .15];                     // hand to the head
     case 'stretch': { const w = Math.sin(tt * 1.5) * .06; return [2.95 + w, 3.05 + w]; }                     // arms up after waking
     case 'look': return i === 0 ? [2.05, 3.25] : [.05, .15];                                                   // shading the eyes
@@ -175,7 +178,7 @@ export function figurePose(e) {
     return [hp, knee, ff];
   });
 
-  let lean = e.lean + (e.hunch || 0);
+  let lean = e.lean + (e.hunch || 0) + (e.drunkA || 0) * Math.sin(tt * 1.7) * .2;
   if (mode === 'pick' || mode === 'kneel') lean += .45 * e.actA;
   if (mode === 'chop') lean += (chopCycle(tt) > .7 ? .3 : -.05) * e.actA;
   if (mode === 'mine') lean += (chopCycle(tt * .9) > .7 ? .45 : 0) * e.actA;
@@ -343,6 +346,12 @@ export function drawFigure(e, look) {
     ctx.beginPath(); ctx.ellipse(sx, sy, r * Z, r * Z * TILT, 0, 0, TAU); ctx.fill();
   }
   const parts = [], tz = pose.hip[2];
+  if (look.boat) {   // a dugout around the one paddling it
+    const b0 = add(pose.hip, [0, -pose.hip[1] + 1, 0], 1), F = pose.F, Sd = pose.S;
+    const q = [add(b0, F, 15 * s), add(add(b0, F, 8 * s), Sd, 4.5 * s), add(add(b0, F, -10 * s), Sd, 4.5 * s), add(b0, F, -14 * s), add(add(b0, F, -10 * s), Sd, -4.5 * s), add(add(b0, F, 8 * s), Sd, -4.5 * s)].map(p => proj(...p));
+    ctx.fillStyle = '#6b4a2e'; ctx.strokeStyle = '#3f2a18'; ctx.lineWidth = 1.4 * Z;
+    ctx.beginPath(); q.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](p[0], p[1])); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
   const ink = look.ink, far = mixc(ink, [255, 255, 255], .28);
   const lw = LW * Math.max(s, .55) * (look.thin || 1);
   const limb = (pts, w) => {

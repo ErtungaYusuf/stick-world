@@ -141,15 +141,20 @@ export const GOALS = {
   knowledge: { label: 'to know everything', drive: .25 },
   devotion:  { label: 'to serve', drive: .35 },
   builder:   { label: 'to build things that last', drive: .4 },
+  revenge:   { label: 'to take revenge', drive: 1 },
+  order:     { label: 'to bring order', drive: .5 },
 };
 // how strongly each purpose pulls on this person, from temperament and from what life has done to them
 export function goalWeights(e) {
   const t = e.tr, x = e.exp;
   return {
     survive: .8,
-    better: .4 + t.empathy * 1.1 + x.gifts * .04,
-    wealth: .3 + t.greed * 1.1 + x.starved * .25 + x.robbed * .25,
-    power: .15 + t.agg * .9 + x.beaten * .12,
+    better: .4 + t.empathy * 1.1 + x.gifts * .04 + (x.orphaned || 0) * t.empathy * .8,
+    wealth: .3 + t.greed * 1.1 + x.starved * .25 + x.robbed * .25 + (x.oppressed || 0) * .1,
+    power: .15 + t.agg * .9 + x.beaten * .12 + (x.orphaned || 0) * .5 + (x.oppressed || 0) * .08,
+    // chaos all around (killings, thefts, being beaten) makes some long for someone to set things straight
+    order: .05 + t.iq * .3 + (x.orphaned || 0) * .6 + Math.min(2, (x.robbed + x.beaten + x.kinKilled) * .15),
+    revenge: e.avenge ? .8 + t.agg * 1.2 + (x.trauma || 0) * .6 : 0,
     cruelty: .02 + Math.max(0, t.agg - t.empathy) * .7 + x.hurt * .02,
     kill: .01 + Math.max(0, t.agg - .55) * .5 + x.kinKilled * .25,
     love: .35 + t.soc * 1.1,
@@ -164,10 +169,10 @@ export function rollGoal(e) {
   let sum = 0;
   for (const k in w) sum += w[k];
   let r = rnd() * sum;
-  for (const k in w) if ((r -= w[k]) <= 0) return { k, c: k === 'devotion' ? e.sacred : null };
+  for (const k in w) if ((r -= w[k]) <= 0) return { k, c: k === 'devotion' ? e.sacred : k === 'revenge' ? 'p:' + e.avenge : null };
   return { k: 'survive', c: null };
 }
-export const goalText = g => g.k === 'devotion' && g.c ? `to serve ${conceptName(g.c)}` : GOALS[g.k].label;
+export const goalText = (g, names) => g.k === 'devotion' && g.c ? `to serve ${conceptName(g.c, names)}` : g.k === 'revenge' && g.c ? `to avenge themselves on ${conceptName(g.c, names)}` : GOALS[g.k].label;
 
 // ───────── words ─────────
 const NAMES = {

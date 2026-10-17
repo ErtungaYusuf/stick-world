@@ -26,9 +26,21 @@ export function updatePlayer(dt) {
   const k = G.keys;
   let ix = ((k.KeyD || k.ArrowRight) ? 1 : 0) - ((k.KeyA || k.ArrowLeft) ? 1 : 0);
   let iz = ((k.KeyS || k.ArrowDown) ? 1 : 0) - ((k.KeyW || k.ArrowUp) ? 1 : 0);
-  const il = Math.hypot(ix, iz);
-  if (il) { ix /= il; iz /= il; G.follow = null; G.director = false; }
-  const spd = il ? (k.ShiftLeft || k.ShiftRight ? RUN : WALK) : 0;
+  let il = Math.hypot(ix, iz), run = k.ShiftLeft || k.ShiftRight;
+  if (il) { ix /= il; iz /= il; G.follow = null; G.director = false; G.walkTo = null; }
+  else if (G.walkTo) {   // clicked somewhere: walk (or run, if far) there, then do what was asked
+    const w = G.walkTo, tgt = w.track ? w.track() : w;
+    if (!tgt) G.walkTo = null;
+    else {
+      const dx = tgt.x - P.x, dz = tgt.z - P.z, d = Math.hypot(dx, dz);
+      if (d <= (w.near || 6) || (w.stuckT = (Math.hypot(P.vx, P.vz) < 8 && d > 10 ? (w.stuckT || 0) + dt : 0)) > .8) {
+        G.walkTo = null;
+        P.heading = Math.atan2(dz, dx);
+        if (w.then) w.then();
+      } else { ix = dx / d; iz = dz / d; il = 1; run = d > 160; G.follow = null; }
+    }
+  }
+  const spd = il ? (run ? RUN : WALK) : 0;
   const tx = ix * spd, tz = iz * spd;
   steer(P, dt, tx, tz, P.ground ? (il ? 1100 : 1400) : 450);
 
@@ -47,11 +59,16 @@ export function updatePlayer(dt) {
       puff(P.x, P.z, Math.round(clamp(impact / 60, 5, 13)), 70, 22, 2.6);
     }
   }
-  moveCollide(G.world, P, dt, PR, G.structs.filter(s => s.k === 'wall').map(s => ({ x: s.x, z: s.z, solid: 10 })));
+  // with a boat in the bag the water carries you
+  const boat = G.me && G.me.boat;
+  if (boat && !G.afloat) G.afloat = { ...G.world, blocked: () => false };
+  P.sailing = !!boat && G.world.blocked(P.x, P.z);
+  if (P.sailing) { P.vx *= .97; P.vz *= .97; }
+  moveCollide(boat ? G.afloat : G.world, P, dt, PR, G.structs.filter(s => s.k === 'wall').map(s => ({ x: s.x, z: s.z, solid: 10 })));
   animate(P, dt, tx, tz);
   const me = G.me, work = me && me.task ? MY_ANIM[me.task.kind] : null;
   if (P.strikeT > 0) P.strikeT -= dt;
-  const act = work || (P.strikeT > 0 ? 'fight' : null);
+  const act = work || (P.strikeT > 0 ? 'fight' : P.sailing ? 'row' : null);
   P.actA = (P.actA || 0) + ((act ? 1 : 0) - (P.actA || 0)) * damp(9, dt);
   if (act) P.actMode = act;
   P.crouch = (P.crouch || 0) + ((CROUCH[act] || 0) - (P.crouch || 0)) * damp(6, dt);
@@ -89,6 +106,7 @@ function sync(map, list, kind) {
   for (const n of list) {
     let v = map.get(n.id);
     if (!v) { v = newBody({ id: n.id, x: n.x, z: n.z, y: n.y || 0, heading: n.h, seed: n.seed ?? Math.random() * 100, lastU: 0, legs: 0 }); map.set(n.id, v); }
+    if (n.n) v.nm = n.n; else if (v.nm) n.n = v.nm;   // names come with the slower full snapshots
     v.net = n; v.netAt = now; seen.add(n.id);
     if (kind === 'person') refreshLook(v);
   }
@@ -99,7 +117,15 @@ export function applySnapshot(s) {
   G.dayT = s.dayT; G.year = s.year; G.timeScale = s.ts; G.season = s.season ?? 0; G.sf = s.sf ?? 0;
   G.rain = s.rain || 0; G.storm = s.storm || 0;
   G.corpses = s.corpses || []; G.fires = s.fires || []; G.structs = s.structs || []; G.crops = s.crops || [];
-  if (s.picked) G.picked = new Set(s.picked);
+  if (s.picked) {
+    // "!id" marks a wild plant that died (stripped bare); it stays a withered tangle until seeds bring it back
+    const dead = new Set(s.picked.filter(id => id[0] === '!').map(id => id.slice(1)));
+    for (const id of G.dead || []) if (!dead.has(id)) { const o = objAt(id); if (o) o.dead = false; }
+    for (const id of dead) { const o = objAt(id); if (o) o.dead = true; }
+    G.dead = dead;
+    G.picked = new Set(s.picked.map(id => id[0] === '!' ? id.slice(1) : id));
+  }
+  G.winterSev = s.ws || 0;
   G.chopping = new Set(s.working || []);
   G.serverFelledVer = s.felledVer || 0;
   G.speed = s.speed ?? 1; G.chiefs = new Set(s.chiefs || []); G.bands = s.bands || {};
@@ -108,7 +134,7 @@ export function applySnapshot(s) {
   if (s.players) sync(G.others, s.players.filter(p => p.id !== G.myId), 'player');
 }
 
-const CROUCH = { pick: .55, kneel: .75, sit: 1, fish: 1, pray: .75, mourn: .75, craft: .7, eat: .9, drink: .75, warm: .7, cry: 1, worship: .8, heal: .75, kindle: .75, plant: .7, sneak: .3, beg: .8, grab: .35, mine: .2, hug: .3 };
+const CROUCH = { drum: .9, row: 1, pick: .55, kneel: .75, sit: 1, fish: 1, pray: .75, mourn: .75, craft: .7, eat: .9, drink: .75, warm: .7, cry: 1, worship: .8, heal: .75, kindle: .75, plant: .7, sneak: .3, beg: .8, grab: .35, mine: .2, hug: .3 };
 const LIE = { sleep: 'sleep', down: 'down', love: 'love' };
 function follow(v, dt) {
   const n = v.net, lag = Math.min((performance.now() - v.netAt) / 1000, .25);
@@ -126,6 +152,8 @@ export function updatePeople(dt) {
     const n = v.net;
     follow(v, dt);
     v.held = !!n.held;
+    v.drunkA = (v.drunkA || 0) + ((n.drunk ? 1 : 0) - (v.drunkA || 0)) * damp(1.5, dt);
+    if (n.sail && !n.act) n.act = 'row';
     if (v.held) { v.vx = v.vz = 0; }
     animate(v, dt, v.vx, v.vz);
     const lying = LIE[n.act];
@@ -272,6 +300,9 @@ export function handleFx(m) {
     const len = 90;
     for (let k = 1; k <= 6; k++) G.particles.push({ x: m.x + Math.cos(m.h) * len * k / 6, y: 14, z: m.z + Math.sin(m.h) * len * k / 6, vx: 0, vz: 0, vy: 0, life: k * .02, max: .25 + k * .02, r: .9, col: '90,70,50' });
     sfx('block', m.x, m.z, null, .5);
+  } else if (m.kind === 'music') {   // notes drifting up from a drum or a flute
+    for (let k = 0; k < 5; k++) G.hearts.push({ x: m.x + (Math.random() - .5) * 20, z: m.z, y: 34 + Math.random() * 8, t: -k * .3, ch: k % 2 ? '♪' : '♫', c: '255,240,190' });
+    sfx(m.item === 'drum' ? 'drum' : 'flute', m.x, m.z);
   } else if (m.kind === 'lightning') {
     G.flashes.push({ x: m.x, z: m.z, t: 0, bolt: true });
     sfx('thunder', null, null, null, .8);

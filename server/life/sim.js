@@ -11,7 +11,7 @@ import { TAU, clamp, smooth, frac, damp, angDiff } from '../../shared/core.js';
 import { WATER as SEA, CH } from '../../shared/world.js';
 import { steer, moveCollide } from '../../shared/motion.js';
 import { DAY, YEAR, rnd, pick, dist, gumbel, createGrid, findPath } from './util.js';
-import { ITEMS, label, edible, TOOLS, best as bestItem, resolveRecipe, ingredients, USED_IN } from './items.js';
+import { ITEMS, label, edible, TOOLS, best as bestItem, resolveRecipe, ingredients, USED_IN, worn } from './items.js';
 import * as M from './mind.js';
 import { createEnv, conceptOfObj, SEASON_NAMES, STRUCT_SOLID } from './env.js';
 import { createAnimals, KINDS } from './animals.js';
@@ -23,10 +23,12 @@ export { YEAR, DAY };
 const NAMES_M = ['Liam', 'Noah', 'Oliver', 'James', 'Elijah', 'William', 'Henry', 'Lucas', 'Benjamin', 'Theo', 'Jack', 'Leo', 'Samuel', 'Owen', 'Daniel', 'Ethan', 'Caleb', 'Isaac', 'Hudson', 'Adam', 'Miles', 'Felix', 'Arthur', 'Ezra', 'Jonah', 'Simon', 'Max', 'Eli', 'Oscar', 'Hugo', 'Finn', 'Gabriel', 'Nathan', 'Ryan', 'Thomas', 'Victor', 'Wesley', 'Aaron', 'Colin', 'Dylan', 'Grant', 'Ian', 'Kai', 'Luke', 'Mark', 'Paul', 'Reid', 'Seth', 'Tyler', 'Vince', 'Abel', 'Bram', 'Cyrus', 'Dorian', 'Emil', 'Gideon', 'Ivo', 'Jasper', 'Knut', 'Lev'];
 const NAMES_F = ['Olivia', 'Emma', 'Charlotte', 'Amelia', 'Sophia', 'Mia', 'Isabella', 'Ava', 'Evelyn', 'Luna', 'Harper', 'Ella', 'Grace', 'Chloe', 'Nora', 'Lily', 'Hazel', 'Zoe', 'Ruby', 'Ivy', 'Alice', 'Clara', 'Stella', 'Violet', 'Aurora', 'Hannah', 'Lucy', 'Anna', 'Sadie', 'Eva', 'Maya', 'Iris', 'Rose', 'Jade', 'Leah', 'Julia', 'Ellie', 'Freya', 'Nina', 'Tessa', 'Vera', 'Wren', 'Faith', 'Gemma', 'Holly', 'Kate', 'Mabel', 'Naomi', 'Pearl', 'Sara', 'Ada', 'Bea', 'Cora', 'Dina', 'Edda', 'Greta', 'Hilde', 'Inga', 'Juno', 'Lena'];
 const SURNAMES = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Miller', 'Wilson', 'Moore', 'Clark', 'Walker', 'Hall', 'Young', 'King', 'Wright', 'Hill', 'Green', 'Baker', 'Carter', 'Turner', 'Parker', 'Evans'];
+const SPOIL = { meat: 420, fish: 320, flesh: 420, milk: 160, cooked: 900 };
+const SPOILS = Object.keys(SPOIL);
 const HEAVY = new Set(['chop', 'gather', 'dig', 'build', 'hunt', 'attack', 'bury']);
 const RITUAL_POSES = ['pray', 'worship', 'dance', 'chant'];
 const STAT_KEYS = ['kills', 'thefts', 'gifts', 'tends', 'sickTends', 'hunted', 'fish', 'picks', 'chops', 'ores', 'crafted', 'built', 'planted', 'harvests', 'fed', 'tamed', 'venerated', 'taught', 'buried', 'cannibal', 'attacks', 'mates'];
-const REMEMBER_ANY = ['rock', 'shrub', 'pine', 'fire', 'hut', 'house', 'store', 'totem', 'grave', 'furnace'];
+const REMEMBER_ANY = ['rock', 'shrub', 'pine', 'fire', 'hut', 'house', 'hall', 'store', 'totem', 'grave', 'furnace', 'well', 'stele'];
 const REMEMBER_RIPE = ['bush', 'tree', 'mushroom', 'herb'];
 
 export function lifeStage(age) { return age < 1 ? 'Baby' : age < 4 ? 'Toddler' : age < 13 ? 'Child' : age < 18 ? 'Teen' : age < 60 ? 'Adult' : 'Elder'; }
@@ -42,15 +44,28 @@ export function createSim(world, hooks) {
     firsts: new Set(), techs: new Map(), bands: new Map(), faiths: new Map(), towns: [], hostility: new Map(),
     followers: new Map(), believers: new Map(), bandSeq: 0, faithSeq: 0,
     killings: 0, attacks: 0, thefts: 0, gifts: 0, crafted: 0, explosions: 0, players: new Map(), avatars: new Map(), bombs: [], home: null,
+    winterSev: 0, winterYear: -1, chronicle: [],
   };
   const log = (type, text) => hooks.event(type, text, S.year);
   const fx = m => hooks.fx(m);
+  function story(e, text, big = false) {
+    if (!e.story) e.story = [];
+    e.story.push({ y: Math.floor(S.year), t: text });
+    if (e.story.length > 18) e.story.splice(1, 1);   // keep the first line (birth) and the latest
+    if (big) chron(`${e.name} ${e.sur || ""}`.trim() + ": " + text);
+  }
+  function chron(text) {
+    S.chronicle.push({ y: Math.round(S.year * 10) / 10, t: text });
+    if (S.chronicle.length > 4000) S.chronicle.splice(0, S.chronicle.length - 4000);
+  }
   function first(key, type, text) { if (S.firsts.has(key)) return false; S.firsts.add(key); log(type, text); return true; }
 
   const pgrid = createGrid(64), agrid = createGrid(96);
+  let agridT = 1;
   const peopleNear = (px, pz, r, fn) => pgrid.near(px, pz, r, fn);
   const x = {
-    S, world, log, fx, first, peopleNear, night: () => env.night(), byId: id => S.byId.get(id),
+    S, world, log, fx, first, peopleNear, night: () => env.night(),
+    byId: id => S.byId.get(id) || [...S.avatars.values()].find(a => a.id === id && a.alive),
     hurtPerson: (...a) => hurtPerson(...a), hurtAvatar: (...a) => players.hurt(...a), stepTo: (...a) => stepTo(...a), destroyStruct: (...a) => destroyStruct(...a), burnNear: (...a) => burnNear(...a),
   };
   const env = createEnv(world, S, x);
@@ -92,7 +107,8 @@ export function createSim(world, hooks) {
       food: .85, water: .85, warmth: .8, energy: .9, health: 1, bleed: 0, dis: 0, tox: 0, strain: null, imm: 0, immune: [],
       social: .7, fear: 0, distress: 0, grief: 0, desire: 0, disgust: 0, wealth: 0,
       inv: {}, M: new Map(), W: new Map(), EL: new Map(), Vprev: 0, R: new Map(), mem: new Map(), ven: {},
-      exp: { hurt: 0, starved: 0, gifts: 0, robbed: 0, beaten: 0, kinKilled: 0 },
+      exp: { hurt: 0, starved: 0, gifts: 0, robbed: 0, beaten: 0, kinKilled: 0, orphaned: 0, oppressed: 0, trauma: 0 },
+      story: [], trauma: 0, chaos: 0, obeyed: 0, avenge: null,
       stats: Object.fromEntries(STAT_KEYS.map(k => [k, 0])),
       preg: 0, pregFather: null, lastBirth: -99,
       task: null, act: null, carry: null, bubble: null, label: 'Idle', asleep: false, held: false, sneaking: false,
@@ -108,7 +124,8 @@ export function createSim(world, hooks) {
 
   // ───────── perception ─────────
   function look(e) {
-    const night = env.night(), R = e.age < 6 ? 110 : 190 * (night > .6 ? .75 : 1);
+    const night = env.night(), lit = night > .6 && (bestItem(e.inv, 'light') || fireNear(e, 60));
+    const R = e.age < 6 ? 110 : 190 * (night > .6 && !lit ? .75 : 1);
     const P = { people: [], animals: [], things: new Map(), shore: null, sacred: [], threats: [] };
     const put = (c, o, d, src) => { let a = P.things.get(c); if (!a) P.things.set(c, a = []); a.push({ o, d, src }); };
     pgrid.near(e.x, e.z, R, (p, d) => {
@@ -125,15 +142,17 @@ export function createSim(world, hooks) {
     for (let cz = Math.floor((e.z - R) / CH); cz <= Math.floor((e.z + R) / CH); cz++)
       for (let cx = Math.floor((e.x - R) / CH); cx <= Math.floor((e.x + R) / CH); cx++)
         for (const o of world.chunkData(cx, cz).objs) {
-          if (o.felled || Math.abs(o.x - e.x) > R || Math.abs(o.z - e.z) > R) continue;
+          if (Math.abs(o.x - e.x) > R || Math.abs(o.z - e.z) > R) continue;
           const d = Math.hypot(o.x - e.x, o.z - e.z);
           if (d > R) continue;
+          if (o.felled) { if ((o.t === 'tree' || o.t === 'pine') && d < 120) put('stump', o, d, 'obj'); continue; }
+          if (o.dead) { if (d < 120) put('withered', o, d, 'obj'); continue; }
           const c = conceptOfObj(o);
           if (c) put(c, o, d, 'obj');
         }
     for (const c of S.corpses) { const d = Math.hypot(c.x - e.x, c.z - e.z); if (d < R) put(env.rotOf(c) > 1 ? 'bones' : c.k === 'person' ? 'corpse' : 'carcass', c, d, 'corpse'); }
     for (const f of S.fires) { const d = Math.hypot(f.x - e.x, f.z - e.z); if (d < R) put('fire', f, d, 'fire'); }
-    for (const s of S.structs) { const d = Math.hypot(s.x - e.x, s.z - e.z); if (d < R) put(s.k, s, d, 'struct'); }
+    for (const s of S.structs) { const d = Math.hypot(s.x - e.x, s.z - e.z); if (d < R) put(s.k === 'granary' ? 'store' : s.k, s, d, 'struct'); }
     for (const c of S.crops) { const d = Math.hypot(c.x - e.x, c.z - e.z); if (d < R) put('crop', c, d, 'crop'); }
     let novel = 0;
     for (const [c, a] of P.things) {
@@ -168,11 +187,11 @@ export function createSim(world, hooks) {
       if (!T) continue;
       if ((T.A.id === 'attack' || T.A.id === 'bomb') && (T.tgt === e || d < 50)) P.threats.push({ c: 'person', o: p });
     }
-    for (const { a, d } of P.animals) if (!a.owner && d < 90 && ((a.k === 'wolf' && d < 75) || (a.state === 'fight' && a.threat === e))) P.threats.push({ c: a.k, o: a });
+    for (const { a, d } of P.animals) if (!a.owner && d < 90 && ((a.k === 'wolf' && d < 75) || (a.k === 'bear' && a.act !== 'sleep') || (a.state === 'fight' && a.threat === e))) P.threats.push({ c: a.k, o: a });
     for (const f of P.things.get('fire') || []) if (f.o.wild && f.d < 70) { P.threats.push({ c: 'fire', o: f.o }); break; }
     P.strangers = [];
     for (const a of S.avatars.values()) {
-      if (!a.online || !a.alive) continue;
+      if (!players.here(a)) continue;
       const d = Math.hypot(a.x - e.x, a.z - e.z);
       if (d > R) continue;
       P.strangers.push({ p: a, d });
@@ -190,7 +209,7 @@ export function createSim(world, hooks) {
     e.huddle = huddle;
     const shelter = env.shelterAt(e.x, e.z);
     e.feltT = env.airTemp(e.x, e.z) + env.fireWarmth(e.x, e.z) + shelter + (shelter ? S.weather.rain * .07 : 0)
-      + (bestItem(e.inv, 'warm') ? ITEMS[bestItem(e.inv, 'warm')].warm : 0) + Math.min(3, huddle) * .04;
+      + worn(e.inv, 'warm') + Math.min(3, huddle) * .04;
   }
 
   // what grabs attention this second (dull minds notice more of the background, and credit it)
@@ -241,7 +260,7 @@ export function createSim(world, hooks) {
         return s / n + t / 100 * .05;
       }
       case 'wealth': return e.wealth + S.structs.filter(s => s.owner === e.id).length * 1.5;
-      case 'power': return (S.followers.get(e.id) || 0) + e.feared * .5;
+      case 'power': return (S.followers.get(e.id) || 0) + e.feared * .5 + e.obeyed * .5;
       case 'cruelty': { let s = 0, n = 0; for (const { p, d } of e.seen.people) if (d < 150) { s += p.Pnow; n++; } return n ? s / n : 0; }
       case 'kill': return e.stats.kills;
       case 'love': return lovedBy(e);
@@ -249,6 +268,8 @@ export function createSim(world, hooks) {
       case 'knowledge': { let n = 0; for (const r of e.R.values()) if (r.ok) n += .5; for (const m of e.M.values()) if (m.n >= 2) n += .03; return n; }
       case 'devotion': return (S.believers.get(e.goal.c) || 0) + Math.min(5, e.ven[e.goal.c] || 0) * .2;
       case 'builder': return S.structs.filter(s => s.builder === e.id).length;
+      case 'revenge': { const t = e.goal.c && S.byId.get(Number(e.goal.c.slice(2))); return t ? 1 - t.health : 2; }
+      case 'order': return (S.followers.get(e.id) || 0) * .4 + e.obeyed * .2 - e.chaos * .4;
     }
     return 0;
   }
@@ -415,6 +436,7 @@ export function createSim(world, hooks) {
     };
     if (A.id === 'flee' && c.from && c.from.feared != null) c.from.feared++;
     if (A.id === 'attack') { S.attacks++; e.stats.attacks++; }
+    for (const k in c) if (!(k in e.task) && k !== "here" && k !== "d" && k !== "cat") e.task[k] = c[k];   // whatever else the action noted down (what to trade, where the well is…)
     e.label = A.label(e, e.task);
   }
   // someone else's action pulls this person in (a conversation, a lesson, an embrace)
@@ -423,7 +445,7 @@ export function createSim(world, hooks) {
     abort(p);
     const A = acts.A[id];
     p.task = {
-      A, k: 'p:' + e.id, key: id + ':' + catOf(e), tgt: e, p: e, stage: 'do', t: 0, dur, joined: true, x: e.x, z: e.z,
+      A, k: 'p:' + e.id, key: id + ':' + catOf(e), tgt: e, p: e, stage: 'do', t: 0, dur, joined: true, x: e.x, z: e.z, inv0: { ...p.inv },
       s0: M.stateOf(p, new Array(M.NV)), tp0: e.Pnow, start: S.time, best: 0, stuck: 0, go: 0,
     };
     p.label = A.label(p, p.task);
@@ -443,12 +465,21 @@ export function createSim(world, hooks) {
     const base = 42 * (e.age < 13 ? .65 + e.age / 13 * .35 : 1) * (1 - smooth(60, 90, e.age) * .4) * (.55 + e.health * .45) * (e.energy < .12 ? .7 : 1);
     return mode === 'run' ? base * 1.95 : mode === 'sneak' ? base * .5 : base;
   }
+  // with a boat the water is a road (slower: paddling)
+  const afloat = { ...world, blocked: () => false };
+  const terrainOf = e => e.inv && e.inv.boat ? afloat : world;
   function moveToward(e, tx, tz, sp, dt) {
     const dx = tx - e.x, dz = tz - e.z, d = Math.hypot(dx, dz) || 1;
     let ux = dx / d, uz = dz / d;
+    const W = terrainOf(e);
+    e.sailing = W === afloat && world.blocked(e.x, e.z);
+    if (e.sailing) {
+      sp *= .65;
+      if (!e.sailed) { e.sailed = true; first('sail', 'discovery', `⛵ ${e.name} pushed a boat out onto the water`); }
+    }
     sp = Math.min(sp, d / dt * .9);   // don't overshoot on long (fast-forward) steps
     const ahead = 16;
-    if (world.blocked(e.x + ux * ahead, e.z + uz * ahead)) {   // water ahead: swing around it, always to the same side
+    if (W.blocked(e.x + ux * ahead, e.z + uz * ahead)) {   // water ahead: swing around it, always to the same side
       const side = e.detour || (e.detour = rnd() < .5 ? 1 : -1);
       for (const a of [.5, 1, 1.5, 2.1, 2.7]) {
         const c = Math.cos(a * side), s = Math.sin(a * side), vx = ux * c - uz * s, vz = ux * s + uz * c;
@@ -456,12 +487,12 @@ export function createSim(world, hooks) {
       }
     } else e.detour = 0;
     steer(e, dt, ux * sp, uz * sp, 600);
-    moveCollide(world, e, dt, 4, wallsNear(e));
+    moveCollide(W, e, dt, 4, wallsNear(e));
   }
   const stepTo = (e, tx, tz, mode, dt) => moveToward(e, tx, tz, speedOf(e, mode), dt);
   function halt(e, dt) {
     steer(e, dt, 0, 0, 900);
-    moveCollide(world, e, dt, 4, wallsNear(e));
+    moveCollide(terrainOf(e), e, dt, 4, wallsNear(e));
   }
   let walls = [];
   const refreshWalls = () => { walls = S.structs.filter(s => STRUCT_SOLID[s.k] && (s.prog ?? 1) >= 1).map(s => ({ x: s.x, z: s.z, solid: STRUCT_SOLID[s.k] })); };
@@ -507,7 +538,7 @@ export function createSim(world, hooks) {
       } else moveToward(e, T.x, T.z, speedOf(e, mode), dt);
       T.go += dt;
       if (d < T.best - 2) { T.best = d; T.stuck = 0; }
-      else if ((T.stuck += dt) > 3 && !T.path && !mobile) {
+      else if ((T.stuck += dt) > 3 && !T.path && !mobile && !e.inv.boat) {
         // walking straight doesn't get there: plan a way around
         T.path = findPath(world.blocked, e.x, e.z, T.x, T.z) || [];
         T.stuck = 0;
@@ -593,6 +624,8 @@ export function createSim(world, hooks) {
     e.energy = clamp(e.energy + (e.asleep ? dt / 16 * (env.shelterAt(e.x, e.z) ? 1.3 : 1) : -dt / 75 * effort), 0, 1);
     if (e.age >= 15) e.desire = Math.min(1, e.desire + dt * e.tr.libido / 90);
     e.social = clamp(e.social - dt / 260 + Math.min(3, e.huddle) * dt * .0015, 0, 1);
+    if (e.trauma > .01) { e.trauma *= Math.exp(-dt / (YEAR * 4)); if (e.distress < e.trauma * .35) e.distress = e.trauma * .35; }
+    e.chaos *= Math.exp(-dt / 120); e.obeyed *= Math.exp(-dt / (YEAR * 2));
     e.fear *= Math.exp(-dt / 12); e.distress *= Math.exp(-dt / 45); e.grief *= Math.exp(-dt / 240); e.tox *= Math.exp(-dt / 30);
     e.warmth = clamp(e.warmth + (Math.min(1, e.feltT + .35) - e.warmth) * dt / 25, 0, 1);
     let cause = null;
@@ -613,6 +646,7 @@ export function createSim(world, hooks) {
     }
     if (e.tox > .3) { e.health -= (e.tox - .3) * dt / 40; cause = cause || 'poison'; }
     if (e.food > .3 && e.water > .3 && e.bleed < .01 && e.dis < .1 && e.tox < .2 && e.warmth > .3) e.health = Math.min(1, e.health + dt / (e.asleep ? 70 : 160));
+    for (const k of SPOILS) if (e.inv[k] && rnd() < dt * e.inv[k] / SPOIL[k]) { take(e, k); if (k !== 'milk') add(e, 'rotten meat'); }
     e.age += dt / YEAR * S.timeScale;
     if (e.health <= 0) return die(e, cause || 'wounds', e.lastHurt && S.time - e.lastHurt.t < 30 ? e.lastHurt.by : null);
     if (rnd() < hazard(e.age) * dt / YEAR * S.timeScale) return die(e, 'age');
@@ -660,13 +694,27 @@ export function createSim(world, hooks) {
       if (!p.task || !['attack', 'flee'].includes(p.task.A.id)) { abort(p); p.thinkT = 0; p.lookT = 0; }
       return false;
     }
-    const arm = bestItem(p.inv, 'armor');
-    if (arm) dmg *= 1 - ITEMS[arm].armor;
+    const arm = Math.min(.8, worn(p.inv, 'armor'));
+    dmg *= 1 - arm;
     p.health -= dmg;
-    p.bleed = Math.min(1, p.bleed + dmg * (edged ? .6 : .15) * (arm ? .5 : 1));
+    p.bleed = Math.min(1, p.bleed + dmg * (edged ? .6 : .15) * (1 - arm * .6));
     p.fear = Math.min(1, p.fear + dmg * 3);
     p.distress = Math.min(1, p.distress + dmg);
     p.exp.hurt++;
+    pgrid.near(p.x, p.z, 140, o => { o.chaos = Math.min(5, (o.chaos || 0) + .3); });
+    // several at once on someone who leads others: a revolt
+    if (by && by.name && (S.followers.get(p.id) || 0) >= 3) {
+      p.foes = (p.foes || []).filter(f => S.time - f.t < 25 && f.id !== by.id);
+      p.foes.push({ id: by.id, t: S.time });
+      if (p.foes.length >= 3 && !(p.revoltAt > S.time - 120)) {
+        p.revoltAt = S.time;
+        const names = p.foes.map(f => S.byId.get(f.id)).filter(Boolean).map(q => q.name);
+        log('revolt', `🔥 Revolt! ${names.slice(0, 4).join(', ')}${names.length > 4 ? ' and others' : ''} rose against ${p.name}`);
+        chron(`Revolt against ${p.name} (${names.join(', ')})`);
+        for (const f of p.foes) { const q = S.byId.get(f.id); if (q) story(q, `Rose up against ${p.name}`); }
+        story(p, 'Faced a revolt');
+      }
+    }
     p.lastHurt = { by: by && by.name ? by : null, cause: by && by.k && KINDS[by.k] ? by.k : cause, t: S.time };
     fx({ kind: 'hit', id: p.id, x: p.x, z: p.z, blood: true, big: dmg > .2, ...(by ? { bx: r1(by.x), bz: r1(by.z) } : {}) });
     p.bubble = { ch: '💢', t: 1 };
@@ -725,6 +773,11 @@ export function createSim(world, hooks) {
     e.inv = {};
     hooks.death(e);
     fx({ kind: 'death', id: e.id, violent });
+    if (killer && e.revoltAt > S.time - 120) {
+      log('revolt', `👑 ${e.name} was overthrown and killed by ${killer.name}`);
+      chron(`${e.name} was overthrown by ${killer.name}`);
+      story(killer, `Overthrew ${e.name}`, true);
+    }
     if (killer) {
       killer.stats.kills++; S.killings++;
       log('killing', `⚔ ${full(e)} was killed by ${full(killer)}${killer.stats.kills > 1 ? ` (${killer.stats.kills} killed so far)` : ''}`);
@@ -742,8 +795,161 @@ export function createSim(world, hooks) {
       if (violent && Math.abs(p.x - e.x) < 120 && Math.abs(p.z - e.z) < 120) {
         p.fear = Math.min(1, p.fear + .3); p.distress = Math.min(1, p.distress + .2);
         if (killer && p !== killer) M.notice(p, 'p:' + killer.id, .8);
+        // seeing someone you love killed leaves a mark that doesn't fade for years
+        if (w > 30) { p.trauma = Math.min(1, (p.trauma || 0) + .45); p.exp.trauma = (p.exp.trauma || 0) + 1; }
+      }
+      // a loved one murdered: a grudge against the killer, and sometimes a life given over to revenge
+      if (killer && killer !== p && killer.alive !== false && (kin(p, e) || p.partnerId === e.id || w > 55) && p.age >= 6) {
+        p.avenge = killer.id;
+        story(p, `Saw ${e.name} killed by ${killer.name}`);
+        if (rnd() < .35 + p.tr.agg * .5) {
+          p.goal = { k: 'revenge', c: 'p:' + killer.id }; p.Gprev = goalValue(p);
+          story(p, `Swore revenge on ${killer.name}`, true);
+          log('purpose', `🗡 ${p.name} swore revenge on ${killer.name} for ${e.name}`);
+        }
       }
     }
+    // children left with no parent at all
+    for (const id of e.kids) {
+      const c = S.byId.get(id);
+      if (!c || c.age >= 16) continue;
+      const other = S.byId.get(c.motherId === e.id ? c.fatherId : c.motherId);
+      if (other) { story(c, `Lost ${e.sex === 'M' ? 'their father' : 'their mother'}, ${e.name}`); continue; }
+      c.exp.orphaned = 1; c.trauma = Math.min(1, (c.trauma || 0) + .5);
+      story(c, `Orphaned at ${Math.floor(c.age)} when ${e.name} died`);
+      if (c.age >= 4) log('story', `💔 ${c.name}, ${Math.floor(c.age)}, has no parents left`);
+    }
+    if (killer && killer.avenge === e.id) killer.avenge = null;
+    for (const p of S.people) if (p.goal.k === 'revenge' && p.goal.c === 'p:' + e.id) {
+      if (killer === p) { story(p, `Took revenge: killed ${e.name}`, true); log('killing', `🗡 ${p.name} has had ${p.sex === 'M' ? 'his' : 'her'} revenge on ${e.name}`); }
+      else story(p, `${e.name}, whom ${p.sex === 'M' ? 'he' : 'she'} hated, died`);
+      p.avenge = null; p.goal = M.rollGoal(p); p.Gprev = goalValue(p);
+    }
+    if (e.age >= 12) story(e, `Died (${cause === 'age' ? 'old age' : beast ? 'a ' + beast : killer ? 'killed by ' + killer.name : cause})`);
+    if ((S.followers.get(e.id) || 0) >= 3 || e.ruler) chron(`${e.name}, followed by ${S.followers.get(e.id) || 0}, died${killer ? ' at the hands of ' + killer.name : ''}`);
+  }
+
+  // ───────── drink, trade, music, writing ─────────
+  function drinkItem(e, k) {
+    if (!take(e, k)) return;
+    const it = ITEMS[k];
+    if (it.back) add(e, it.back); else if (k === 'waterpot') add(e, 'pot');
+    e.water = Math.min(1, e.water + (it.drink || .5));
+    if (it.food) e.food = Math.min(1, e.food + it.food);
+    if (it.brew) {   // drunk: cheerful, sociable, careless, sleepy
+      e.distress *= 1 - it.brew * .6; e.grief *= 1 - it.brew * .3; e.fear *= .5;
+      e.social = Math.min(1, e.social + it.brew * .25); e.energy = Math.max(0, e.energy - it.brew * .12);
+      e.tox = Math.min(1, e.tox + it.brew * .18); e.drunkT = S.time + 40;
+      e.bubble = { ch: '🍺', t: 2 };
+      first('drunk:' + k, 'discovery', `🍺 ${e.name} got drunk on ${label(k)}`);
+    }
+  }
+  // how much a thing is worth to someone, all told (what it does, what it makes, how much they like it)
+  function valueOf(e, k) {
+    const s0 = ahead(e), p0 = M.painOf(e, s0), v = itemValue(e, k, s0, p0, new Map());
+    return v.now + v.later + worth(e, k) * .1;
+  }
+  function dealWith(e, p) {
+    const mine = Object.keys(e.inv).filter(k => e.inv[k] > 0), theirs = Object.keys(p.inv).filter(k => p.inv[k] > 0);
+    if (!mine.length || !theirs.length) return null;
+    const want = theirs.slice(0, 6).map(k => ({ k, v: valueOf(e, k) })).sort((a, b) => b.v - a.v)[0];
+    const spare = mine.slice(0, 6).filter(k => k !== want.k).map(k => ({ k, v: valueOf(e, k) / Math.max(1, e.inv[k] / 2) })).sort((a, b) => a.v - b.v)[0];
+    if (!want || !spare || want.v <= spare.v * 1.15 + .005) return null;
+    return { give: spare.k, get: want.k };
+  }
+  // the other side weighs it with their own values (and how they feel about the one offering)
+  const acceptsDeal = (p, e, giveUp, receive) => M.like(p, 'p:' + e.id) > -25 && valueOf(p, receive) + M.like(p, 'p:' + e.id) / 2000 > valueOf(p, giveUp);
+  function swap(e, p, give, get) {
+    if (!has(e, give) || !has(p, get)) return false;
+    take(e, give); add(p, give); take(p, get); add(e, get);
+    e.stats.trades = (e.stats.trades || 0) + 1; S.trades = (S.trades || 0) + 1;
+    M.notice(p, 'p:' + e.id, .6);
+    first('trade', 'trade', `🤝 ${e.name} traded ${label(give)} for ${p.name}'s ${label(get)}`);
+    if (give === 'coins' || get === 'coins') first('trade:coins', 'trade', `🪙 Coins changed hands for the first time: ${e.name} and ${p.name}`);
+    return true;
+  }
+  function music(e, k) {
+    e.social = Math.min(1, e.social + .1);
+    let n = 0;
+    pgrid.near(e.x, e.z, 100, o => {
+      if (o === e || o.asleep) return;
+      o.social = Math.min(1, o.social + ITEMS[k].music * .15); o.distress *= .85; o.grief *= .95;
+      M.notice(o, 'p:' + e.id, .3); M.notice(o, 'music', .5);
+      n++;
+    });
+    fx({ kind: 'music', x: e.x, z: e.z, item: k });
+    if (n >= 3) first('music', 'culture', `🥁 ${e.name} played the ${k} and ${n} people gathered round`);
+  }
+  function inscribe(e, st, rk) {
+    if (!st.lore) st.lore = [];
+    if (st.lore.includes(rk) || !(e.R.get(rk) || {}).ok) return false;
+    st.lore.push(rk);
+    const r = e.R.get(rk), what = r.res === 'FIRE' ? 'fire' : label(r.res);
+    if (first('write', 'culture', `📜 ${e.name} carved how to make ${what} into a standing stone — the first writing`)) chron(`${e.name} invented writing`);
+    if (st.lore.length === 10) log('culture', `📜 The carved stone near ${e.name}'s people holds ten secrets now`);
+    story(e, `Carved the making of ${what} into stone`);
+  }
+  function study(e, st) {
+    const unknown = (st.lore || []).filter(k => !(e.R.get(k) || {}).ok);
+    if (!unknown.length) return false;
+    if (rnd() > .35 + e.tr.iq * .45) return false;
+    const rk = pick(unknown), res = resolveRecipe(rk);
+    e.R.set(rk, { ok: 1, tries: 0, res: res ? res.result : null });
+    first('read', 'culture', `📖 ${e.name} learned something from the carved stone`);
+    return true;
+  }
+  // snares catch small game by themselves, now and then
+  function snares() {
+    for (const st of S.structs) {
+      if (st.k !== 'snare' || !done(st) || rnd() > .006) continue;
+      const prey = S.animals.find(a => KINDS[a.k].small && !a.owner && Math.abs(a.x - st.x) < 160 && Math.abs(a.z - st.z) < 160);
+      if (!prey) continue;
+      prey.x = st.x; prey.z = st.z;
+      zoo.die(prey, 'snared');
+      const c = S.corpses[S.corpses.length - 1];
+      if (c) c.owner = st.owner;
+      const o = S.byId.get(st.owner);
+      if (o) first('snare', 'work', `🪤 ${o.name}'s snare caught a ${prey.k}`);
+    }
+  }
+
+  // ───────── tribute ─────────
+  // The one asked decides like any other choice: what giving in has cost them before, what refusing has
+  // brought down on them (a beating that came after is pinned on the refusal), and how they feel about the asker.
+  function decideYield(t, e) {
+    const s0 = ahead(t), p0 = M.painOf(t, s0), magic = magicOf(t), memo = new Map(), cat = catOf(e);
+    const yes = score(t, { A: acts.A.yield, k: 'p:' + e.id, key: 'yield:' + cat, p: e, d: 0 }, s0, p0, magic, memo) + .02 * gumbel();
+    const no = score(t, { A: acts.A.refuse, k: 'p:' + e.id, key: 'refuse:' + cat, p: e, d: 0 }, s0, p0, magic, memo) + .02 * gumbel();
+    return yes >= no ? 'yield' : 'refuse';
+  }
+  function tribute(e, t) {
+    // what they hand over: whatever the asker wants most of what they carry
+    const got = [];
+    for (let n = 0; n < 2; n++) {
+      let k = null, bw = -1;
+      for (const it in t.inv) if (t.inv[it] > 0) { const w = worth(e, it) + (edible(it) ? .02 : 0) + rnd() * .02; if (w > bw) { bw = w; k = it; } }
+      if (!k) break;
+      const c = Math.min(t.inv[k], edible(k) ? 2 : 1);
+      take(t, k, c); add(e, k, c); got.push(`${c} ${label(k)}`);
+    }
+    e.obeyed = (e.obeyed || 0) + 1; e.stats.tribute = (e.stats.tribute || 0) + 1;
+    t.exp.oppressed = (t.exp.oppressed || 0) + 1;
+    M.notice(t, 'p:' + e.id, 1.2);
+    if (e.stats.tribute === 3) { story(e, 'Began taking tribute'); }
+    if (e.stats.tribute === 8 && !e.ruler) {
+      e.ruler = true;
+      const n = S.followers.get(e.id) || 0;
+      log('leader', `👑 ${e.name} rules by fear now: ${n ? n + ' follow, and ' : ''}others hand over what ${e.sex === 'M' ? 'he' : 'she'} demands`);
+      story(e, 'Became a ruler who takes what they want', true);
+    }
+    if (t.exp.oppressed === 4) story(t, `Kept being made to give to ${e.name}`);
+    return got;
+  }
+  function refused(e, t) {
+    e.distress = Math.min(1, e.distress + .12);
+    M.notice(e, 'p:' + t.id, 1.4);   // defiance stings, and is remembered
+    t.bubble = { ch: '✋', t: 1.4 };
+    if ((t.stats.defied = (t.stats.defied || 0) + 1) === 3) story(t, `Stood up to ${e.name}`);
   }
 
   // ───────── birth ─────────
@@ -779,6 +985,9 @@ export function createSim(world, hooks) {
       for (const p of [m, fa]) if (p) { M.setLike(p, 'p:' + b.id, 75); M.setLike(b, 'p:' + p.id, 60); p.kids.push(b.id); }
       for (const id of m.kids) { const s = S.byId.get(id); if (s && s !== b) { M.setLike(s, 'p:' + b.id, 30); M.setLike(b, 'p:' + s.id, 30); } }
       S.births++;
+      story(b, `Born to ${m.name}${f ? ' and ' + f.name : ''}`);
+      if (fa) story(fa, `${b.name} was born`);
+      story(m, `Gave birth to ${b.name}`);
       hooks.birth(b);
       log('birth', `👶 ${full(b)} was born · mother ${m.name}, father ${f ? f.name : '?'}`);
     }
@@ -808,6 +1017,7 @@ export function createSim(world, hooks) {
   function eat(e, k) {
     take(e, k);
     const it = ITEMS[k];
+    if (it.back) add(e, it.back);
     e.food = Math.min(1, e.food + it.food * (e.age < 8 ? 1.4 : 1));
     if (it.poison) e.tox = Math.min(1, e.tox + it.poison);
     if (it.germ && rnd() < it.germ * 4) e.tox = Math.min(1, e.tox + .35);
@@ -838,6 +1048,7 @@ export function createSim(world, hooks) {
     const n = Math.min(v.inv[k], edible(k) ? 2 : 1);
     take(v, k, n); add(e, k, n);
     e.stats.thefts++; S.thefts++;
+    pgrid.near(e.x, e.z, 120, o => { if (o !== e) o.chaos = Math.min(5, (o.chaos || 0) + .25); });
     const caught = rnd() < (v.asleep ? .12 : .55);
     if (caught) {
       v.distress = Math.min(1, v.distress + .15 + worth(v, k) * n * .3);
@@ -929,7 +1140,8 @@ export function createSim(world, hooks) {
   }
   function recordFollow(e, p) { e.following = p.id; e.followUntil = S.time + 40; }
   function tend(e, p) {
-    if (has(e, 'bandage')) { take(e, 'bandage'); p.bleed *= .03; } else p.bleed *= .15;
+    if (has(e, 'bandage')) { take(e, 'bandage'); p.bleed *= .03; } else if (has(e, 'poultice')) { take(e, 'poultice'); p.bleed *= .1; p.imm = Math.min(1, p.imm + .2); } else p.bleed *= .15;
+    if (has(e, 'splint') && p.health < .6) { take(e, 'splint'); p.health = Math.min(1, p.health + .25); }
     if (has(e, 'medicine')) { take(e, 'medicine'); p.imm = Math.min(1, p.imm + .6); p.tox *= .3; }
     else if (has(e, 'herb')) { take(e, 'herb'); p.imm = Math.min(1, p.imm + .3); p.tox *= .6; }
     p.social = Math.min(1, p.social + .15);
@@ -959,6 +1171,8 @@ export function createSim(world, hooks) {
     const it = ITEMS[k];
     if (it.stanch) p.bleed *= 1 - it.stanch;
     if (it.cure) { p.imm = Math.min(1, (p.imm || 0) + it.cure); p.tox = (p.tox || 0) * .4; }
+    if (it.detox) p.tox = (p.tox || 0) * (1 - it.detox);
+    if (it.heal) p.health = Math.min(1, p.health + it.heal);
     if (p !== e && M.notice) M.notice(p, 'p:' + e.id, .8);
     return true;
   }
@@ -1066,7 +1280,8 @@ export function createSim(world, hooks) {
     M.learn(e, key, d, 4, w, mask);
   }
   function harvestCrop(e, c) {
-    const item = c.k === 'grain' ? 'grain' : 'berry', n = c.k === 'grain' ? 7 : 6;   // tended plants bear far more than wild ones
+    const tool = bestItem(e.inv, 'farm'), item = c.k === 'flax' ? 'fiber' : c.k === 'grain' ? 'grain' : 'berry';
+    const n = Math.round((c.k === 'grain' ? 7 : 6) * (1 + (tool ? ITEMS[tool].farm : 0)));   // tended plants bear far more than wild ones
     add(e, item, n);
     e.stats.harvests++;
     if (c.k === 'grain') S.crops.splice(S.crops.indexOf(c), 1); else c.next = S.time + 45;
@@ -1098,7 +1313,8 @@ export function createSim(world, hooks) {
     if (c.k === 'person') {
       harm(e, 'p:' + c.pid, 1.2, c); harm(e, 'corpse', .6, c);
       first('butcher:person', 'cannibal', `🔪 ${e.name} cut meat from ${c.name}'s body`);
-    } else if (c.owner === e.id) credit(e, 'feed:' + c.k, n * worth(e, 'meat'));
+    } else if (c.owner === e.id && c.cause === 'snared') credit(e, 'build:snare', n * worth(e, 'meat'));
+    else if (c.owner === e.id) credit(e, 'feed:' + c.k, n * worth(e, 'meat'));
   }
   function bury(e, c) {
     S.corpses.splice(S.corpses.indexOf(c), 1);
@@ -1135,7 +1351,7 @@ export function createSim(world, hooks) {
       if (d < 60 && hurtPerson(p, 1.2 * (1 - d / 60), by, 'explosion')) killed++;
     }
     for (const a of S.animals.slice()) { const d = Math.hypot(a.x - px, a.z - pz); if (d < 60) zoo.hurt(a, 1.5 * (1 - d / 60), by); }
-    for (const a of S.avatars.values()) { const d = Math.hypot(a.x - px, a.z - pz); if (a.online && d < 60) players.hurt(a, 1.2 * (1 - d / 60), by); }
+    for (const a of S.avatars.values()) { const d = Math.hypot(a.x - px, a.z - pz); if (d < 60) players.hurt(a, 1.2 * (1 - d / 60), by); }
     for (const s of S.structs.slice()) if (s.k !== 'grave' && Math.hypot(s.x - px, s.z - pz) < 40) destroyStruct(s, 'explosion');
     env.treesNear(px, pz, 40, (o, d) => { if (d < 40) env.igniteTree(o); });
     log('explosion', `💥 ${by.name}'s bomb went off${killed ? `, killing ${killed}` : ''}`);
@@ -1164,7 +1380,8 @@ export function createSim(world, hooks) {
   Object.assign(x, {
     has, hasAll, add, take, invTotal, best: (e, prop) => bestItem(e.inv, prop), catOf, kin, busy, landAround, findObj, eat, carerOf, adopt,
     steal, stealStore, loot, withdraw, deposit, giftFor, giveItem, join, consents, chat, teach, loveDone, recordFollow, tend,
-    fireNear, furnaceNear, sandy, canCraft, treat, craft, sacredOf, buildSpot, spotFree, layFoundation, raiseSite, done, learnBody, plantSpot, plant, harvestCrop, feedFor, feedAnimal, butcher, bury,
+    fireNear, furnaceNear, sandy, canCraft, treat, craft, sacredOf, story, chron, decideYield, tribute, refused,
+    drinkItem, dealWith, acceptsDeal, swap, music, inscribe, study, valueOf, buildSpot, spotFree, layFoundation, raiseSite, done, learnBody, plantSpot, plant, harvestCrop, feedFor, feedAnimal, butcher, bury,
     ritualPose, ritualDone, arson, explode, harm, reachOf, strikePower, weaponOf, face, notice: M.notice,
   });
   const acts = createActions(x);
@@ -1207,6 +1424,35 @@ export function createSim(world, hooks) {
   // Three bands of twelve, each around its own fire, far apart and strangers to one another.
   // ancestors: optional heritage from the survivors of an earlier world (see evolve.js) — each founder then
   // carries one ancestor's genes (with mutation) and what they believed, liked and knew how to make.
+  // ───────── newcomers ─────────
+  // The world does not end at the edge of what we simulate: when the land around has emptied, a family from
+  // beyond the hills drifts in, now and then, with its own ways and some of the crafts known out there.
+  function migrants() {
+    if (S.people.length >= 8 || S.time - (S.lastMigrants ?? -1e9) < YEAR * 4 || rnd() > .5) return;
+    S.lastMigrants = S.time;
+    const c0 = S.people.length ? pick(S.people) : S.home || world.findSpawn();
+    const camp = campSite(c0.x, c0.z, 450, 1300, []) || landAround(c0.x, c0.z, 400, 900);
+    if (!camp) return;
+    const sur = pick(SURNAMES), n = 6 + Math.floor(rnd() * 4), band = [];
+    const lore = [...S.techs.values()].map(t => t.how).filter(Boolean);
+    for (let i = 0; i < n; i++) {
+      const sex = i % 2 ? 'F' : 'M', adult = i < n - 2, age = adult ? 16 + rnd() * 24 : 3 + rnd() * 9, p = world.landNear(camp.x, camp.z, 20, 110);
+      const e = makePerson({ sex, name: freshName(sex), sur, age, bornYear: S.year - age, x: p.x, z: p.z });
+      raise(e); e.goal = M.rollGoal(e);
+      e.inv = { berry: 2 + Math.floor(rnd() * 3), stick: 1 + Math.floor(rnd() * 2) };
+      if (adult && rnd() < .6) e.R.set('stick+stick', { ok: 1, tries: 1, res: 'FIRE' });
+      if (adult && rnd() < .5) e.R.set('stone+stone', { ok: 1, tries: 1, res: 'blade' });
+      if (adult && lore.length) for (let k = 0; k < 2; k++) if (rnd() < .35) { const rk = pick(lore), r = resolveRecipe(rk); if (r) e.R.set(rk, { ok: 1, tries: 1, res: r.result }); }
+      story(e, `Came from beyond the hills with the ${sur} family`);
+      band.push(e);
+    }
+    for (const a of band) for (const b of band) if (a !== b) M.setLike(a, 'p:' + b.id, 25 + rnd() * 30);
+    const shore = env.nearestShore(camp.x, camp.z, 400);
+    for (const e of band) { if (shore) e.mem.set('river', { x: shore.x, z: shore.z, t: S.time }); e.mem.set('fire', { x: camp.x, z: camp.z, t: S.time }); hooks.birth(e); }
+    env.makeFire(camp.x, camp.z, 300);
+    log('arrival', `🚶 Strangers came from beyond the hills: the ${sur} family, ${n} of them`);
+    chron(`The ${sur} family arrived from beyond the hills (${n} people)`);
+  }
   function found({ ancestors = null } = {}) {
     const sp = world.findSpawn(), camps = [];
     const heirs = ancestors && ancestors.length ? { M: ancestors.filter(a => a.sex === 'M'), F: ancestors.filter(a => a.sex === 'F') } : null;
@@ -1279,7 +1525,7 @@ export function createSim(world, hooks) {
     S.dayT = frac(S.time / DAY + .3);
     S.year = S.time / YEAR;
     pgrid.clear(); for (const p of S.people) if (!p.held) pgrid.add(p);
-    agrid.clear(); for (const a of S.animals) agrid.add(a);
+    if ((agridT += dt) >= .25) { agridT = 0; agrid.clear(); for (const a of S.animals) agrid.add(a); }
     env.tick(dt);
     zoo.tick(dt);
     for (const e of S.people.slice()) {
@@ -1314,6 +1560,7 @@ export function createSim(world, hooks) {
   }
   function perSecond() {
     env.perSecond();
+    snares();
     // contagion: the sick breathe on those around them
     for (const e of S.people) {
       if (!e.strain || e.dis < .1) continue;
@@ -1336,7 +1583,7 @@ export function createSim(world, hooks) {
         e.feared *= .5;
       }
     }
-    if (Math.floor(S.year) !== Math.floor(S.year - 1 / YEAR)) env.regrowYearly();
+    if (Math.floor(S.year) !== Math.floor(S.year - 1 / YEAR)) { env.regrowYearly(); migrants(); }
   }
   function maybeNewGoal(e) {
     let admired = null, aw = 50;
@@ -1347,7 +1594,7 @@ export function createSim(world, hooks) {
     else return;
     if (e.goal.k === old.k && e.goal.c === old.c) return;
     e.Gprev = goalValue(e);
-    if (['kill', 'cruelty', 'devotion', 'power'].includes(e.goal.k)) log('purpose', `🜂 ${e.name} now lives ${M.goalText(e.goal)}${admired && e.goal.k === admired.goal.k ? `, like ${admired.name}` : ''}`);
+    if (['kill', 'cruelty', 'devotion', 'power'].includes(e.goal.k)) log('purpose', `🜂 ${e.name} now lives ${M.goalText(e.goal, S.names)}${admired && e.goal.k === admired.goal.k ? `, like ${admired.name}` : ''}`);
   }
 
   // ───────── reports ─────────
@@ -1364,19 +1611,19 @@ export function createSim(world, hooks) {
     const chiefs = [...S.bands.values()].map(b => b.chief).filter(Boolean);
     return {
       t: 'state', time: r2(S.time), dayT: S.dayT, year: r2(S.year), ts: S.timeScale, season: env.season(), sf: frac(S.year) * 4 % 1,
-      rain: r2(S.weather.rain), storm: S.weather.storm ? 1 : 0, speed: S.speed,
+      rain: r2(S.weather.rain), storm: S.weather.storm ? 1 : 0, speed: S.speed, ws: r2(S.winterSev || 0),
       people: S.people.map(e => ({
         id: e.id, x: r1(e.x), z: r1(e.z), y: r1(e.y), h: r2(e.heading), vx: r1(e.vx), vz: r1(e.vz), held: e.held ? 1 : 0,
         act: e.act, carry: e.task && e.task.stage === 'go' && e.task.item ? e.task.item : null, tool: e.task && e.task.A.tool ? e.task.A.tool(e, e.task) : null,
         sex: e.sex, age: r2(e.age), hue: r1(e.hue), tall: r2(e.tall), preg: e.preg > 0 ? 1 : 0,
         bub: e.bubble ? e.bubble.ch : null, bubT: e.bubble ? r1(e.bubble.t) : 0, seed: r1(e.seed), hp: r2(e.health),
-        cold: e.warmth < .35 ? 1 : 0, sick: e.dis + e.tox > .3 ? 1 : 0, bleed: e.bleed > .05 ? 1 : 0, grp: e.band,
+        sail: e.sailing ? 1 : 0, drunk: e.drunkT > S.time ? 1 : 0, ...(full ? { n: e.name } : {}), cold: e.warmth < .35 ? 1 : 0, sick: e.dis + e.tox > .3 ? 1 : 0, bleed: e.bleed > .05 ? 1 : 0, grp: e.band,
         it: WEAR(e), fol: S.followers.get(e.id) || 0, load: invTotal(e), run: e.task && e.task.stage === 'go' && e.task.A.speed && e.task.A.speed(e, e.task) === 'run' ? 1 : 0,
       })),
       animals: S.animals.map(a => ({ id: a.id, k: a.k, x: r1(a.x), z: r1(a.z), h: r2(a.h), vx: r1(a.vx), vz: r1(a.vz), act: a.act, tame: a.owner ? 1 : 0, young: a.age < 1 ? 1 : 0, hp: r2(Math.max(0, a.hp) / KINDS[a.k].hp) })),
       corpses: S.corpses.map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), h: r2(c.h || 0), rot: r2(env.rotOf(c)), sex: c.sex, hue: c.hue, tall: c.tall, age: c.age, meat: c.meat, v: c.violent ? 1 : 0 })),
       fires: S.fires.map(f => ({ id: f.id, x: r1(f.x), z: r1(f.z), f: r2(Math.min(1, f.fuel / 200)), wild: f.wild ? 1 : 0 })),
-      structs: S.structs.map(s => ({ id: s.id, k: s.k, x: r1(s.x), z: r1(s.z), own: s.owner, burn: s.burning ? 1 : 0, c: s.c ? M.conceptName(s.c, S.names) : null, sym: s.c && S.faiths.get(s.c) ? S.faiths.get(s.c).symbol : null, n: s.k === 'store' ? invTotal(s) : 0, p: s.prog != null && s.prog < 1 ? Math.round(s.prog * 100) / 100 : 1 })),
+      structs: S.structs.map(s => ({ id: s.id, k: s.k, x: r1(s.x), z: r1(s.z), own: s.owner, burn: s.burning ? 1 : 0, c: s.c ? M.conceptName(s.c, S.names) : null, sym: s.c && S.faiths.get(s.c) ? S.faiths.get(s.c).symbol : null, n: s.k === 'store' || s.k === 'granary' ? invTotal(s) : 0, ...(s.lore ? { lore: s.lore.length } : {}), p: s.prog != null && s.prog < 1 ? Math.round(s.prog * 100) / 100 : 1 })),
       crops: S.crops.map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), ripe: env.cropRipe(c) ? 1 : 0, g: r2(Math.min(1, (S.time - c.planted) / 100)) })),
       ...(sendPicked ? { picked: pickedCache } : {}),
       working, felledVer: S.felledVer,
@@ -1445,7 +1692,7 @@ export function createSim(world, hooks) {
     const partner = e.partnerId && S.byId.get(e.partnerId);
     const st = e.strain && S.strains.get(e.strain);
     return {
-      age: Math.floor(e.age), stage: lifeStage(e.age), doing: e.label, goal: M.goalText(e.goal),
+      age: Math.floor(e.age), stage: lifeStage(e.age), doing: e.label, goal: M.goalText(e.goal, S.names), story: (e.story || []).slice(-5),
       mood: pains.length ? `suffering from ${pains.slice(0, 2).map(p => p[0]).join(' and ')}` : 'at ease', pain: r2(e.Pnow),
       needs: { food: pct(e.food), water: pct(e.water), warmth: pct(e.warmth), energy: pct(e.energy), health: pct(e.health) },
       loves: likes.filter(([, w]) => w > 15).slice(0, 6).map(([c]) => name(c)), hates: likes.filter(([, w]) => w < -15).slice(-5).reverse().map(([c]) => name(c)),
@@ -1461,7 +1708,7 @@ export function createSim(world, hooks) {
   }
   function society() {
     const goals = {}, roles = {};
-    for (const e of S.people) { const g = M.goalText(e.goal); goals[g] = (goals[g] || 0) + 1; roles[e.role] = (roles[e.role] || 0) + 1; }
+    for (const e of S.people) { const g = M.goalText(e.goal, S.names); goals[g] = (goals[g] || 0) + 1; roles[e.role] = (roles[e.role] || 0) + 1; }
     const knowers = k => S.people.filter(p => [...p.R.values()].some(r => r.ok && r.res === k)).length;
     return {
       bands: [...S.bands.values()].map(b => ({ name: b.name, color: b.color, members: b.size, chief: b.chief && S.byId.get(b.chief) ? S.byId.get(b.chief).name : null, followers: b.chief ? S.followers.get(b.chief) || 0 : 0, year: Math.floor(b.year) })).sort((a, b) => b.members - a.members),
@@ -1485,8 +1732,8 @@ export function createSim(world, hooks) {
       richest: ranked(w).map(p => ({ name: full(p), wealth: w(p), carrying: invTotal(p), role: p.role })),
       thieves: ranked(p => p.stats.thefts).map(p => ({ name: full(p), thefts: p.stats.thefts, caught: p.exp.robbed })),
       givers: ranked(p => p.stats.gifts).map(p => ({ name: full(p), gifts: p.stats.gifts })),
-      leaders: ranked(p => S.followers.get(p.id) || 0).map(p => ({ name: full(p), followers: S.followers.get(p.id), band: p.band && S.bands.get(p.band) ? S.bands.get(p.band).name : null, goal: M.goalText(p.goal) })),
-      killers: ranked(p => p.stats.kills).map(p => ({ name: full(p), kills: p.stats.kills, goal: M.goalText(p.goal) })),
+      leaders: ranked(p => S.followers.get(p.id) || 0).map(p => ({ name: full(p), followers: S.followers.get(p.id), band: p.band && S.bands.get(p.band) ? S.bands.get(p.band).name : null, goal: M.goalText(p.goal, S.names) })),
+      killers: ranked(p => p.stats.kills).map(p => ({ name: full(p), kills: p.stats.kills, goal: M.goalText(p.goal, S.names) })),
       totals: { thefts: S.thefts, gifts: S.gifts, crafted: S.crafted, killings: S.killings },
     };
   }
@@ -1512,6 +1759,7 @@ export function createSim(world, hooks) {
       state: {
         time: S.time, nextId: S.nextId, births: S.births, deaths: S.deaths, timeScale: S.timeScale, speed: S.speed, fertility: S.fertility, cap: S.cap,
         killings: S.killings, attacks: S.attacks, thefts: S.thefts, gifts: S.gifts, crafted: S.crafted, explosions: S.explosions, bandSeq: S.bandSeq, faithSeq: S.faithSeq,
+        winterSev: S.winterSev || 0, winterYear: S.winterYear ?? -1, chronicle: S.chronicle, lastMigrants: S.lastMigrants ?? null, trades: S.trades || 0,
         people: ppl, animals: S.animals.map(a => ({ ...a, threat: null, prey: null })), corpses: S.corpses, fires: S.fires, structs: S.structs, crops: S.crops,
         plants: mapOut(S.plants), strains: mapOut(S.strains), weather: S.weather, firsts: [...S.firsts], techs: mapOut(S.techs),
         bands: mapOut(S.bands), faiths: mapOut(S.faiths), towns: S.towns, hostility: mapOut(S.hostility), home: S.home,
@@ -1521,7 +1769,7 @@ export function createSim(world, hooks) {
     };
   }
   function restore(st) {
-    for (const k of ['time', 'nextId', 'births', 'deaths', 'timeScale', 'speed', 'fertility', 'cap', 'killings', 'attacks', 'thefts', 'gifts', 'crafted', 'explosions', 'bandSeq', 'faithSeq', 'home'])
+    for (const k of ['time', 'nextId', 'births', 'deaths', 'timeScale', 'speed', 'fertility', 'cap', 'killings', 'attacks', 'thefts', 'gifts', 'crafted', 'explosions', 'bandSeq', 'faithSeq', 'home', 'winterSev', 'winterYear', 'chronicle', 'lastMigrants', 'trades'])
       if (st[k] !== undefined) S[k] = st[k];
     S.year = S.time / YEAR; S.dayT = frac(S.time / DAY + .3);
     S.names = new Map(st.names || []);
@@ -1537,6 +1785,7 @@ export function createSim(world, hooks) {
       if (!o) continue;
       if (s.felled != null) o.felled = true;
       if (s.spent) o.ore = null;
+      if (s.dead != null) o.dead = true;
     }
     for (const f of S.fires) if (f.obj) { const o = env.objById(f.obj); if (o) o.burning = true; }
     players.restore(st.avatars);
@@ -1544,7 +1793,7 @@ export function createSim(world, hooks) {
   }
 
   return {
-    S, tick, found, heritage, snapshot, stats, live, society, economy, settlements, felled, serialize, restore, explain: (id, n) => S.byId.has(id) ? explain(S.byId.get(id), n) : null,
+    S, x, tick, found, heritage, snapshot, stats, live, society, economy, settlements, felled, serialize, restore, explain: (id, n) => S.byId.has(id) ? explain(S.byId.get(id), n) : null,
     setSpeed: v => { S.speed = clamp(v, 0, 200); }, setFertility: v => { S.fertility = clamp(v, 0, 20); }, setCapacity: v => { S.cap = clamp(Math.round(v), 10, 2000); },
     setTimeScale: v => { S.timeScale = clamp(v, 1, 40); },
     setPlayer: (id, p) => S.players.set(id, p), removePlayer: id => S.players.delete(id),

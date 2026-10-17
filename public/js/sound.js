@@ -121,6 +121,14 @@ const SFX = {
     const t = now(), b = jit(660, .05);
     tone(d, t, .5, 'sine', b, b, .25, .01); tone(d, t + .12, .7, 'sine', b * 1.5, b * 1.5, .2, .01);
   },
+  drum(d) {   // a few hide-drum beats
+    const t = now();
+    for (let k = 0; k < 4; k++) { tone(d, t + k * .22, .18, 'sine', k % 2 ? 95 : 120, 60, .8, .004); noise(d, t + k * .22, .05, 'lowpass', 900, .7, .25); }
+  },
+  flute(d) {   // a short bone-flute phrase
+    const t = now(), scale = [523, 587, 659, 784, 880];
+    for (let k = 0; k < 5; k++) { const f = scale[Math.floor(Math.random() * scale.length)]; tone(d, t + k * .2, .22, 'triangle', f, f * 1.01, .22, .03); }
+  },
   bite(d) {   // a snarl
     const t = now();
     const f = noise(d, t, .25, 'bandpass', 500, 4, .6, .02); f.frequency.linearRampToValueAtTime(900, t + .2);

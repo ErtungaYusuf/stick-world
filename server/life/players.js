@@ -4,7 +4,7 @@
 // like anyone: there is no rule that says how they react, only what the stranger does to them.
 import { TAU, clamp } from '../../shared/core.js';
 import { CH } from '../../shared/world.js';
-import { ITEMS, label, edible, recipeKey, ingredients, best as bestItem } from './items.js';
+import { ITEMS, label, edible, recipeKey, ingredients, best as bestItem, worn } from './items.js';
 import { conceptOfObj } from './env.js';
 import { rnd } from './util.js';
 import * as M from './mind.js';
@@ -16,6 +16,9 @@ const ANIM = { pick: 'pick', sticks: 'pick', stone: 'mine', ore: 'mine', fell: '
 
 export function createPlayers(world, S, x, BUILD, BUILD_T) {
   const { env } = x;
+  // here = connected, alive, and the game actually running in front of someone (positions keep arriving);
+  // a background tab, a closed laptop lid or a dead connection leaves no body standing around
+  const here = a => a.online && a.alive && Date.now() - (a.seenAt || 0) < 6000;
   const msg = (a, text, kind = 'info') => { a.msgs.push({ text, kind }); if (a.msgs.length > 8) a.msgs.shift(); };
 
   function make(token, name) {
@@ -37,9 +40,11 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
   const leave = token => { const a = S.avatars.get(token); if (a) { a.online = false; a.task = null; } };
   function move(token, p) {
     const a = S.avatars.get(token);
-    if (!a || !a.alive) return;
+    if (!a) return;
+    a.seenAt = Date.now();   // still there, even while dead (waiting to wake up again)
+    if (!a.alive) return;
     Object.assign(a, p);
-    a.heading = p.h;
+    a.heading = p.h; a.seenAt = Date.now();
     if (a.task && Math.hypot(a.x - a.task.x0, a.z - a.task.z0) > 26) { msg(a, 'You stopped ' + a.task.what + '.', 'dim'); a.task = null; }
   }
 
@@ -57,8 +62,9 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
   const front = (a, k = 10) => ({ x: a.x + Math.cos(a.heading) * k, z: a.z + Math.sin(a.heading) * k });
 
   // E: the most sensible thing to do with whatever is right in front
-  function use(a) {
-    const f = front(a), C = [];
+  function use(a, aim) {
+    const f = aim && Math.hypot(aim.x - a.x, aim.z - a.z) < 48 ? { x: aim.x, z: aim.z } : front(a), C = [];
+    if (aim) a.heading = Math.atan2(f.z - a.z, f.x - a.x);
     const near = (o, r) => Math.hypot(o.x - f.x, o.z - f.z) < r;
     const dd = o => Math.hypot(o.x - f.x, o.z - f.z);
     for (const s of S.structs) if ((s.prog ?? 1) < 1 && near(s, 34)) C.push({ d: dd(s) - 8, what: `building the ${s.k}`, kind: 'build', dur: 3, run: () => {
@@ -146,8 +152,12 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
   }
 
   // R / click: strike whoever is in front (people or animals) with the best weapon carried
-  function strike(a) {
+  function strike(a, toId) {
     if (a.cool > 0) return;
+    if (toId != null) {
+      const t = x.byId(toId) || S.animals.find(an => an.id === toId) || [...S.avatars.values()].find(o => o.id === toId);
+      if (t) a.heading = Math.atan2(t.z - a.z, t.x - a.x);
+    }
     const w = bestItem(a.inv, 'power'), reach = (bestItem(a.inv, 'reach') ? ITEMS[bestItem(a.inv, 'reach')].reach : 10) + 10;
     a.cool = w && ITEMS[w].ammo ? 1.1 : .65;
     a.hitT = .3;
@@ -161,7 +171,7 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
     };
     x.peopleNear(a.x, a.z, reach, p => consider(p, false));
     for (const an of S.animals) if (Math.abs(an.x - a.x) < reach && Math.abs(an.z - a.z) < reach) consider(an, true);
-    for (const o of S.avatars.values()) if (o !== a && o.online && o.alive) consider(o, false);
+    for (const o of S.avatars.values()) if (o !== a && here(o)) consider(o, false);
     if (!best) { msg(a, 'You swing at the air.', 'dim'); return; }
     const t = best.t;
     a.heading = Math.atan2(t.z - a.z, t.x - a.x);
@@ -240,29 +250,58 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
     if (it.vision) msg(a, 'The world swims and glows…', 'info');
     msg(a, `You ate ${label(k)}.`, 'info');
   }
-  function give(a, k) {
+  function give(a, k, toId) {
     if (!x.has(a, k)) return;
     let best = null, bd = 34;
-    x.peopleNear(a.x, a.z, 34, (p, d) => { if (d < bd && !p.held) { bd = d; best = p; } });
+    const chosen = toId != null && x.byId(toId);
+    if (chosen && Math.hypot(chosen.x - a.x, chosen.z - a.z) < 40) best = chosen;
+    else x.peopleNear(a.x, a.z, 34, (p, d) => { if (d < bd && !p.held) { bd = d; best = p; } });
     if (!best) return msg(a, 'Nobody close enough to give it to.', 'dim');
     x.giveItem(a, best, k);
     msg(a, `You gave ${label(k)} to ${best.name}.`, 'good');
   }
 
+  // a few words: they warm (or not) to whoever talks to them, and show what they feel
+  function talk(a, toId) {
+    const p = x.byId(toId);
+    if (!p || Math.hypot(p.x - a.x, p.z - a.z) > 45) return msg(a, 'Too far away to talk.', 'dim');
+    if (p.asleep) return msg(a, `${p.name} is asleep.`, 'dim');
+    const w = M.like(p, 'p:' + a.id);
+    p.social = Math.min(1, p.social + .15);
+    M.notice(p, 'p:' + a.id, .5);
+    p.bubble = { ch: w > 25 ? '☺' : w < -25 ? '😠' : w < -5 ? '…' : '!', t: 2 };
+    a.heading = Math.atan2(p.z - a.z, p.x - a.x);
+    const mood = p.Pnow > 1.2 ? 'is suffering' : p.Pnow > .6 ? 'looks troubled' : 'seems at ease';
+    const feel = w > 40 ? 'is glad to see you' : w > 10 ? 'is friendly' : w < -40 ? 'hates you' : w < -10 ? 'is wary of you' : 'does not know what to make of you';
+    msg(a, `${p.name} ${feel} and ${mood}. (${p.label || 'idle'})`, w < -10 ? 'bad' : 'info');
+  }
+  function feedAnimal(a, toId, k) {
+    const an = S.animals.find(q => q.id === toId);
+    if (!an || Math.hypot(an.x - a.x, an.z - a.z) > 40) return msg(a, 'Too far away.', 'dim');
+    if (!k || !x.has(a, k)) return msg(a, 'Hold some food to offer it.', 'dim');
+    const r = x.zoo.feed(an, a);
+    if (!r) return msg(a, `The ${an.k} won't come near.`, 'dim');
+    x.take(a, k);
+    msg(a, r === 'tamed' ? `The ${an.k} follows you now. 🐾` : `The ${an.k} eats from your hand.`, 'good');
+    if (r === 'tamed') x.first('tame:' + an.k, 'herding', `🐾 ${a.name} tamed a ${an.k}`);
+  }
   function act(token, m) {
     const a = S.avatars.get(token);
     if (!a || !a.alive || !m || typeof m.a !== 'string') return;
     switch (m.a) {
-      case 'use': if (!a.task) use(a); break;
+      case 'use': if (!a.task) use(a, Number.isFinite(m.x) && Number.isFinite(m.z) ? { x: m.x, z: m.z } : null); break;
+      case 'talk': talk(a, m.to); break;
+      case 'feed': feedAnimal(a, m.to, m.item); break;
       case 'cancel': a.task = null; break;
-      case 'strike': strike(a); break;
+      case 'strike': strike(a, m.to); break;
       case 'throw': if (Number.isFinite(m.x) && Number.isFinite(m.z)) throwBomb(a, m.x, m.z); break;
       case 'craft': if (!a.task) craftNow(a, m.items, m.where); break;
       case 'build': if (!a.task && typeof m.k === 'string') build(a, m.k); break;
       case 'plant': plant(a, m.item); break;
       case 'eat': eat(a, m.item); break;
       case 'treat': if (x.treat(a, a, m.item)) msg(a, `You used ${label(m.item)}.`, 'good'); break;
-      case 'give': give(a, m.item); break;
+      case 'give': give(a, m.item, m.to); break;
+      case 'drink': if (x.has(a, m.item) && ITEMS[m.item] && ITEMS[m.item].drink) { x.take(a, m.item); if (ITEMS[m.item].back) x.add(a, ITEMS[m.item].back); else if (m.item === 'waterpot') x.add(a, 'pot'); a.health = Math.min(1, a.health + .05); msg(a, `You drank ${label(m.item)}.`, 'info'); } break;
       case 'drop': if (x.take(a, m.item, clamp(m.n | 0, 1, 99))) msg(a, `You threw away ${label(m.item)}.`, 'dim'); break;
       case 'name': if (typeof m.name === 'string' && m.name.trim()) a.name = m.name.trim().slice(0, 20); break;
     }
@@ -270,12 +309,12 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
 
   // ───────── body ─────────
   function hurt(a, dmg, by) {
-    if (!a.alive) return false;
-    const arm = bestItem(a.inv, 'armor');
-    if (arm) dmg *= 1 - ITEMS[arm].armor;
+    if (!here(a)) return false;
+    const arm = Math.min(.8, worn(a.inv, 'armor'));
+    dmg *= 1 - arm;
     a.health -= dmg;
     const edged = !!(by && by.inv && bestItem(by.inv, 'power')) || (by && by.k === 'wolf');
-    a.bleed = Math.min(1, a.bleed + dmg * (edged ? .6 : .15) * (arm ? .5 : 1));
+    a.bleed = Math.min(1, a.bleed + dmg * (edged ? .6 : .15) * (1 - arm * .6));
     a.task = null;
     x.fx({ kind: 'hit', pid: a.id, x: a.x, z: a.z, blood: true, big: dmg > .2, ...(by ? { bx: Math.round(by.x * 10) / 10, bz: Math.round(by.z * 10) / 10 } : {}) });
     // say who it is once per fight, not on every blow
@@ -303,7 +342,7 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
   }
   function tick(dt) {
     for (const a of S.avatars.values()) {
-      if (!a.online) continue;
+      if (!a.online || Date.now() - (a.seenAt || 0) > 6000) { a.task = null; continue; }
       if (!a.alive) {
         if (S.time >= a.respawnAt) {
           const h = S.home || { x: a.x, z: a.z }, p = x.landAround(h.x, h.z, 30, 160) || h;
@@ -329,7 +368,7 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
   // someone made something where a player could see it: they can pick it up too
   function watch(e, rk, res) {
     for (const a of S.avatars.values()) {
-      if (a === e || !a.online || !a.alive || (a.R.get(rk) || {}).ok) continue;
+      if (a === e || !here(a) || (a.R.get(rk) || {}).ok) continue;
       if (Math.hypot(a.x - e.x, a.z - e.z) > 90) continue;
       a.R.set(rk, { ok: 1, tries: 0, res, seen: e.name });
       const g = ingredients(rk);
@@ -346,14 +385,14 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
       task: a.task ? { what: a.task.what, kind: a.task.kind, p: Math.round(a.task.t / a.task.dur * 100) / 100 } : null,
       fire: !!(x.fireNear(a, 40) || x.furnaceNear(a, 45)), furnace: !!x.furnaceNear(a, 45),
       respawn: a.alive ? 0 : Math.max(0, Math.ceil(a.respawnAt - S.time)), msgs: a.msgs.splice(0),
-      weapon: bestItem(a.inv, 'power'), armor: bestItem(a.inv, 'armor'),
+      weapon: bestItem(a.inv, 'power'), armor: bestItem(a.inv, 'armor'), boat: !!a.inv.boat,
     };
     if (a.teleport) { v.teleport = a.teleport; a.teleport = null; }
     let known = 0; for (const r of a.R.values()) if (r.ok) known++;
     if (conn.bookVer !== known) { conn.bookVer = known; v.book = [...a.R.entries()].filter(([, r]) => r.ok).map(([rk, r]) => ({ rk, res: r.res, seen: r.seen || null })); }
     return v;
   }
-  const others = () => [...S.avatars.values()].filter(a => a.online && a.alive).map(a => ({
+  const others = () => [...S.avatars.values()].filter(here).map(a => ({
     id: a.id, name: a.name, x: Math.round(a.x * 10) / 10, z: Math.round(a.z * 10) / 10, h: Math.round(a.heading * 100) / 100, y: a.y || 0, vx: a.vx || 0, vz: a.vz || 0,
     act: a.task ? ANIM[a.task.kind] : a.hitT > 0 ? 'fight' : null, tool: weaponLook(a), hp: Math.round(a.health * 100) / 100,
   }));
@@ -368,5 +407,5 @@ export function createPlayers(world, S, x, BUILD, BUILD_T) {
       S.avatars.set(a.token, a);
     }
   }
-  return { join, leave, move, act, tick, hurt, watch, view, others, serialize, restore };
+  return { join, leave, move, act, tick, hurt, watch, view, others, serialize, restore, here };
 }

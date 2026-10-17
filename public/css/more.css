@@ -1,0 +1,45 @@
+/* readable text over a busy, bright world: every HUD block sits on its own dark glass */
+.hud { text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 6px rgba(0, 0, 0, .6); }
+#help, #stats {
+  background: rgba(14, 17, 24, .66); border-radius: 10px; padding: 8px 12px;
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+#help { font-size: 13px; line-height: 1.65; }
+#stats { font-size: 13px; line-height: 1.6; }
+#stats .log { font-size: 13px; }
+#stats .log div:nth-child(n+4) { opacity: .75; }
+
+/* hotbar: what you carry (bottom centre) */
+#hotbar {
+  position: fixed; right: 16px; bottom: 92px; z-index: 3;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 5px; border-radius: 12px; width: max-content; max-width: min(420px, calc(100vw - 32px));
+  background: rgba(14, 17, 24, .72); backdrop-filter: blur(3px);
+}
+#hotbar .hb { position: relative; width: 46px; height: 46px; flex: none; border: 0; border-radius: 9px; cursor: pointer;
+  background: rgba(255, 255, 255, .08); color: #fff; font: 600 11px "Segoe UI", sans-serif; }
+#hotbar .hb:hover { background: rgba(255, 255, 255, .18); }
+#hotbar .hb.on { outline: 2px solid #ffd36a; background: rgba(255, 211, 106, .22); }
+#hotbar .ic { font-size: 22px; line-height: 46px; }
+#hotbar .n { position: absolute; right: 4px; bottom: 2px; text-shadow: 0 1px 2px #000; }
+#hotbar .key { position: absolute; left: 4px; top: 1px; font-size: 9px; opacity: .55; }
+#hotbar .empty { color: rgba(255, 255, 255, .6); font: 500 12px "Segoe UI", sans-serif; padding: 12px 10px; white-space: nowrap; }
+
+/* what clicking would do */
+#cursor-hint { position: fixed; left: 0; top: 0; z-index: 6; pointer-events: none; padding: 2px 8px; border-radius: 8px;
+  background: rgba(14, 17, 24, .8); color: #fff; font: 600 12px "Segoe UI", sans-serif; white-space: nowrap; transition: opacity .12s; opacity: 0; }
+
+/* a person's menu */
+#pmenu { position: fixed; z-index: 7; width: 220px; padding: 8px; border-radius: 10px; display: none;
+  background: rgba(18, 22, 32, .95); color: #fff; font: 500 13px "Segoe UI", sans-serif; box-shadow: 0 6px 20px rgba(0, 0, 0, .4); }
+#pmenu.show { display: block; }
+#pmenu .who { font-weight: 700; margin: 0 4px 6px; }
+#pmenu button { display: block; width: 100%; text-align: left; padding: 6px 8px; margin: 2px 0; border: 0; border-radius: 7px; cursor: pointer;
+  background: rgba(255, 255, 255, .07); color: #fff; font: inherit; }
+#pmenu button:hover { background: rgba(255, 255, 255, .17); }
+#pmenu button.bad { color: #ffb0a0; }
+#pmenu .gives { display: none; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+#pmenu.giving .gives { display: flex; }
+#pmenu .gives .gv { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; position: relative; font-size: 19px; padding: 0; text-align: center; }
+#pmenu .gives .gv span { position: absolute; right: 3px; bottom: 1px; font-size: 10px; }
+
+#toasts { bottom: 200px !important; }

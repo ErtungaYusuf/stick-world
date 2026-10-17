@@ -66,11 +66,88 @@ export const ITEMS = {
   necklace:     { label: 'gold necklace' },
   powder:       { label: 'black powder' },
   bomb:         { label: 'bomb' },
+  // ── the wider world: herds, fields, the sea, crafts, music, writing, money ──
+  milk:         { food: .12, drink: .25, spoil: 140, eat: 'animal' },
+  wool:         {},
+  yarn:         {},
+  cloth:        {},
+  tunic:        { warm: .28, label: 'woollen tunic' },
+  'fur coat':   { warm: .4 },
+  boots:        { warm: .08, label: 'hide boots' },
+  hat:          { warm: .06, label: 'felt hat' },
+  needle:       { label: 'bone needle' },
+  cheese:       { food: .35, eat: 'animal' },
+  butter:       { food: .25, fuel: 30 },
+  salt:         {},
+  'salted meat':{ food: .32, label: 'salted meat' },
+  jerky:        { food: .26, label: 'smoked meat' },
+  'rotten meat':{ food: .06, germ: .6, label: 'rotten meat' },
+  flour:        { food: .04 },
+  porridge:     { food: .38, back: 'pot' },
+  stew:         { food: .6, back: 'pot', label: 'meat stew' },
+  beer:         { drink: .3, brew: .5, back: 'pot', label: 'pot of beer' },
+  wine:         { drink: .25, brew: .7, back: 'pot', label: 'pot of wine' },
+  honey:        { food: .25, eat: 'animal' },
+  quern:        { label: 'grinding stone' },
+  bowl:         { label: 'clay bowl' },
+  brick:        {},
+  lamp:         { light: 1, label: 'oil lamp' },
+  candle:       { light: .6 },
+  hoe:          { farm: .4, label: 'digging hoe' },
+  sickle:       { farm: .7, cut: 3 },
+  plough:       { farm: 1.2 },
+  'fishing rod':{ fish: .45, label: 'fishing rod' },
+  boat:         { boat: 1, label: 'dugout boat' },
+  paddle:       {},
+  sling:        { power: .1, reach: 70, ammo: 'stone' },
+  club:         { power: .16, reach: 12, label: 'stone club' },
+  mace:         { power: .36, reach: 13, label: 'bronze mace' },
+  shield:       { armor: .2, label: 'hide shield' },
+  helmet:       { armor: .18, label: 'bronze helmet' },
+  mail:         { armor: .62, label: 'iron mail' },
+  drum:         { music: .7 },
+  flute:        { music: .6, label: 'bone flute' },
+  crown:        { label: 'gold crown' },
+  coins:        { label: 'coins' },
+  trap:         { label: 'snare' },
+  tablet:       { label: 'clay tablet' },
+  dye:          { label: 'berry dye' },
+  paint:        {},
+  basket:       { label: 'woven basket' },
+  poultice:     { stanch: .5, cure: .2 },
+  antidote:     { detox: .8, label: 'charcoal draught' },
+  splint:       { heal: .25 },
+  saw:          { chop: 9, cut: 2, label: 'bronze saw' },
+  hammer:       { label: 'iron hammer' },
+  nails:        {},
+  glass:        {},
+  bottle:       { label: 'glass bottle' },
+  lens:         { light: .2, label: 'glass lens' },
+  ash:          {},
+  soap:         { cure: .15 },
+  bark:         { fuel: 30 },
+  pitch:        { light: .5, label: 'pitch torch' },
 };
 export const label = k => (ITEMS[k] && ITEMS[k].label) || k;
 export const edible = k => !!(ITEMS[k] && ITEMS[k].food);
 export const TOOLS = new Set(['blade', 'spear', 'axe', 'pick', 'net', 'pot', 'cloak', 'torch', 'metal blade', 'metal axe', 'metal spear', 'metal pick',
-  'sword', 'scissors', 'bow', 'hide armor', 'iron armor', 'necklace', 'bomb']);
+  'sword', 'scissors', 'bow', 'hide armor', 'iron armor', 'necklace', 'bomb', 'tunic', 'fur coat', 'boots', 'hat', 'needle', 'quern', 'bowl', 'lamp',
+  'hoe', 'sickle', 'plough', 'fishing rod', 'boat', 'paddle', 'sling', 'club', 'mace', 'shield', 'helmet', 'mail', 'drum', 'flute', 'crown', 'basket', 'saw', 'hammer']);
+// worn things stack, one per body part: a hat, a tunic and boots all keep you warm; helmet, mail and shield all protect
+export const SLOT = { cloak: 'body', 'fur coat': 'body', tunic: 'body', 'hide armor': 'body', 'iron armor': 'body', mail: 'body', boots: 'feet', hat: 'head', helmet: 'head', shield: 'arm' };
+export function worn(inv, prop) {
+  const bestBy = {};
+  let loose = 0;
+  for (const name in inv) {
+    const it = ITEMS[name];
+    if (!(inv[name] > 0) || !it || !it[prop]) continue;
+    const sl = SLOT[name];
+    if (sl) { if ((bestBy[sl] || 0) < it[prop]) bestBy[sl] = it[prop]; } else loose = Math.max(loose, it[prop]);
+  }
+  let t = loose;
+  for (const k in bestBy) t += bestBy[k];
+  return t;
+}
 
 // the best thing someone carries for a purpose: 'power' (fighting), 'reach', 'chop', 'dig', 'fish', 'cut', 'armor', 'warm'
 // (a bow is no weapon without arrows)
@@ -154,6 +231,94 @@ const TABLE = [
   [['charcoal', 'sulfur'], null, 'powder', .08],
   [['pot', 'powder', 'rope'], null, 'bomb', .75],
   [['pot', 'powder'], null, 'bomb', .3],
+  // ── herds and cloth ──
+  [['blade', 'bone'], null, { needle: 2, blade: 1 }, .6],            // a bone splinter, bored with a blade point
+  [['stick', 'wool'], null, { yarn: 1, stick: 1 }, .8],              // spun on a stick spindle
+  [['wool', 'wool'], null, 'yarn', .5],
+  [['stick', 'yarn', 'yarn'], null, { cloth: 1, stick: 1 }, .65],     // woven on a frame
+  [['cloth', 'needle', 'yarn'], null, { tunic: 1, needle: 1 }, .7],
+  [['fur', 'fur', 'needle'], null, { 'fur coat': 1, needle: 1 }, .65],
+  [['fiber', 'fur', 'needle'], null, { boots: 1, needle: 1 }, .7],
+  [['needle', 'wool'], null, { hat: 1, needle: 1 }, .6],             // felted
+  // ── milk, salt, the larder ──
+  [['milk', 'milk', 'salt'], null, 'cheese', .7],
+  [['milk', 'milk'], null, 'butter', .35],                           // churned
+  [['waterpot'], 'fire', { salt: 1, pot: 1 }, .45],                  // boiled down to a crust
+  [['meat', 'salt'], null, 'salted meat', .9], [['fish', 'salt'], null, 'salted meat', .9],
+  [['meat', 'meat', 'stick'], 'fire', { jerky: 2, stick: 1 }, .7],   // smoked over a slow fire
+  [['fish', 'fish', 'stick'], 'fire', { jerky: 2, stick: 1 }, .7],
+  [['grain', 'grain', 'quern'], null, { flour: 2, quern: 1 }, .9],
+  [['grain', 'stone', 'stone'], null, { flour: 1, stone: 2 }, .6],   // ground between two stones
+  [['flour', 'waterpot'], 'fire', { bread: 2, pot: 1 }, .85],
+  [['grain', 'waterpot'], 'fire', 'porridge', .85],
+  [['herb', 'meat', 'waterpot'], 'fire', 'stew', .85],
+  [['fish', 'herb', 'waterpot'], 'fire', 'stew', .85],
+  [['grain', 'grain', 'waterpot'], null, 'beer', .5],                 // left to ferment
+  [['fruit', 'fruit', 'pot'], null, 'wine', .5],
+  [['berry', 'berry', 'pot'], null, 'wine', .4],
+  [['stone', 'stone', 'stone'], null, 'quern', .45],
+  // ── pottery, fire, light ──
+  [['clay', 'clay'], 'fire', { bowl: 2 }, .65],
+  [['clay', 'sand'], 'fire', { brick: 2 }, .7],
+  [['clay', 'clay', 'sand'], 'furnace', { brick: 4 }, .85],
+  [['bowl', 'fat', 'fiber'], null, 'lamp', .85],
+  [['fat', 'fiber'], null, { candle: 2 }, .7],
+  [['resin', 'stick'], null, { pitch: 2 }, .8],
+  [['bark'], 'fire', 'ash', .9],
+  [['stick'], 'furnace', { ash: 1, charcoal: 1 }, .8],
+  [['ash', 'fat'], 'fire', { soap: 2 }, .6],
+  [['ash', 'sand', 'sand'], 'furnace', 'glass', .6],
+  [['glass'], 'fire', 'bottle', .5],
+  [['glass', 'stone'], null, { lens: 1, stone: 1 }, .35],            // ground and polished
+  // ── fields ──
+  [['bone', 'rope', 'stick'], null, 'hoe', .55],
+  [['rope', 'stick', 'stone'], null, 'hoe', .75],
+  [['metal blade', 'stick'], 'fire', 'sickle', .7],
+  [['blade', 'bone', 'stick'], null, 'sickle', .5],
+  [['iron', 'stick', 'stick'], 'fire', 'plough', .55],
+  [['bronze', 'stick', 'stick'], 'fire', 'plough', .45],
+  [['fiber', 'fiber', 'stick'], null, 'basket', .7],
+  [['rope', 'stick', 'stick'], null, 'trap', .6],
+  [['fiber', 'stick'], null, 'trap', .3],
+  // ── water ──
+  [['fiber', 'needle', 'stick'], null, { 'fishing rod': 1, needle: 1 }, .75],
+  [['fiber', 'fiber', 'bone'], null, 'fishing rod', .4],
+  [['axe', 'stick'], null, { paddle: 1, axe: 1 }, .6],
+  [['axe', 'stick', 'stick'], 'fire', { boat: 1, axe: 1 }, .35],     // a log hollowed by fire and adze
+  [['metal axe', 'stick', 'stick'], 'fire', { boat: 1, 'metal axe': 1 }, .6],
+  [['glue', 'stick', 'stick'], null, 'boat', .3],
+  [['fur', 'rope', 'stick'], null, 'boat', .35],                     // a hide coracle
+  // ── war ──
+  [['fiber', 'fur'], null, 'sling', .5],
+  [['fiber', 'fiber', 'fur'], null, 'sling', .45],
+  [['glue', 'stick', 'stone'], null, 'club', .75],
+  [['bronze', 'bronze', 'stick'], 'furnace', 'mace', .6],
+  [['fur', 'stick', 'stick'], null, 'shield', .6],
+  [['bronze', 'bronze'], 'furnace', 'helmet', .55],
+  [['iron', 'iron', 'iron'], 'furnace', 'mail', .45],
+  [['iron', 'stone'], 'fire', { hammer: 1, stone: 1 }, .6],
+  [['iron', 'iron'], 'fire', { nails: 6 }, .65],
+  [['bronze', 'metal blade'], 'fire', 'saw', .6],
+  // ── music and finery, money ──
+  [['bowl', 'fur', 'stick'], null, 'drum', .6],
+  [['fur', 'pot', 'stick'], null, 'drum', .45],
+  [['blade', 'bone'], 'fire', { flute: 1, blade: 1 }, .25],
+  [['bone', 'metal blade'], null, { flute: 1, 'metal blade': 1 }, .55],
+  [['gold', 'gold'], 'furnace', 'crown', .6],
+  [['gold', 'gold'], 'fire', 'crown', .2],
+  [['copper'], 'furnace', { coins: 6 }, .7],
+  [['gold'], 'furnace', { coins: 12 }, .75],
+  [['bronze'], 'furnace', { coins: 8 }, .7],
+  [['berry', 'berry', 'bowl'], null, { dye: 2, bowl: 1 }, .8],
+  [['dye', 'fat'], null, { paint: 2 }, .8],
+  [['ash', 'bowl', 'fat'], null, { paint: 2, bowl: 1 }, .7],
+  // ── healing ──
+  [['fat', 'herb'], null, 'poultice', .8],
+  [['charcoal', 'waterpot'], null, { antidote: 1, pot: 1 }, .7],
+  [['fiber', 'stick', 'stick'], null, 'splint', .4],
+  [['rope', 'stick', 'stick'], 'fire', 'splint', .2],
+  // ── writing ──
+  [['clay', 'stick'], null, { tablet: 2, stick: 1 }, .75],          // a slab of clay and a stylus
 ];
 
 // "a+b+c", sorted, repeats kept, with "+fire" / "+furnace" for where it's done

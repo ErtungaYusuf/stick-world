@@ -161,10 +161,12 @@ function cardLines(d) {
     d.pregnant ? `Pregnant · month ${d.pregnant}` : '',
     d.founder ? 'One of the founders' : `Mother: ${d.mother ? d.mother.name : '?'} · Father: ${d.father ? d.father.name : '?'}`,
     temper && temper.length ? `Nature: ${temper.join(', ')}` : '',
+    ...(d.story || []).map((s, i) => `${i ? '          ' : 'Life: '}year ${s.y} · ${s.t}`),
   ].filter(Boolean);
 }
 
 export function drawTooltip() {
+  if (G.menuOpen) return;
   const v = G.hovered || G.follow;
   if (!v) return;
   const Z = G.cam.zoom, [gx, gy] = proj(v.x, 0, v.z);
@@ -172,7 +174,7 @@ export function drawTooltip() {
   ctx.beginPath(); ctx.ellipse(gx, gy, 13 * v.scale * Z, 13 * v.scale * Z * TILT, 0, 0, TAU); ctx.stroke();
 
   const lines = cardLines(detailsFor(v.id));
-  lines.push(G.follow === v && !G.hovered ? 'Following · move to release the camera' : 'Click to follow with the camera');
+  lines.push(G.follow === v && !G.hovered ? 'Following · move to release the camera' : 'Click: talk · give · strike · follow');
   ctx.font = '600 13px "Segoe UI",system-ui,sans-serif';
   const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 26, h = lines.length * 19 + 14;
   let x = G.hovered ? G.mouse.x + 18 : G.W - w - 20, y = G.hovered ? G.mouse.y + 18 : 150;

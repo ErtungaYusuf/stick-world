@@ -9,6 +9,9 @@ const LOOK = {
   deer:   { thigh: 7, shin: 7.5, spine: 18, rise: 2.5, neck: 10, neckA: -1.05, lw: 3, ink: [110, 74, 44] },
   boar:   { thigh: 3.5, shin: 3.5, spine: 17, rise: 1, neck: 3, neckA: .1, lw: 3.6, ink: [52, 40, 32], heavy: 3.2 },
   rabbit: { thigh: 2.2, shin: 2.4, spine: 7, rise: 0, neck: 2, neckA: -.9, lw: 2.6, ink: [120, 104, 86], arch: 4 },
+  goat:   { thigh: 5, shin: 5, spine: 15, rise: 1.5, neck: 6, neckA: -.95, lw: 2.8, ink: [128, 118, 104] },
+  bear:   { thigh: 6.5, shin: 5.5, spine: 24, rise: 3, neck: 5, neckA: -.2, lw: 4.4, ink: [64, 46, 34], heavy: 2.6, arch: 5 },
+  fox:    { thigh: 3.6, shin: 3.6, spine: 13, rise: 1, neck: 4, neckA: -.55, lw: 2.6, ink: [196, 104, 48] },
 };
 const screen = () => ctx.setTransform(G.DPR, 0, 0, G.DPR, 0, 0);
 const shadow = (x, z, r) => {
@@ -17,7 +20,7 @@ const shadow = (x, z, r) => {
   ctx.beginPath(); ctx.ellipse(sx, sy, r * Z, r * Z * TILT, 0, 0, TAU); ctx.fill();
 };
 
-const BOX = [-26, -36, 30, 4], frames = new Map();
+const BOX = [-30, -40, 34, 4], frames = new Map();
 let X = ctx;
 
 export function drawAnimal(v) {
@@ -31,6 +34,7 @@ export function drawAnimal(v) {
     return;
   }
   shadow(v.x, v.z, L.spine * .5 * s);
+  if (n.act === 'sleep') { drawSleeper(v, L, s); return; }
   const moving = Math.hypot(v.vx, v.vz) > 4 ? (v.run ? 2 : 1) : 0, frame = moving ? Math.floor((((v.legs % 1) + 1) % 1) * 8) : 0;
   const bite = n.act === 'bite' ? (Math.sin(G.time * 18) > 0 ? 1 : 0) : -1, hit = v.hitT > 0;
   const res = G.cam.zoom * G.DPR * s > 2.2 ? 3 : 1.5, antlers = n.k === 'deer' && n.id % 2 === 0 && !n.young;
@@ -48,6 +52,17 @@ export function drawAnimal(v) {
   const [bx, by] = proj(v.x, 0, v.z), D = G.DPR, k = D * G.cam.zoom * s / res;
   ctx.setTransform(k * face * fs, 0, 0, k, D * bx, D * by);
   ctx.drawImage(c, BOX[0] * res, BOX[1] * res);
+  screen();
+}
+
+function drawSleeper(v, L, s) {
+  const [bx, by] = proj(v.x, 0, v.z), D = G.DPR, k = D * G.cam.zoom * s, breath = 1 + Math.sin(G.time * 1.3 + v.id) * .04;
+  ctx.setTransform(k, 0, 0, k * breath, D * bx, D * by);
+  ctx.strokeStyle = rgb(L.ink); ctx.lineCap = 'round'; ctx.lineWidth = L.lw * 2.2;
+  ctx.beginPath(); ctx.moveTo(-L.spine / 2, -3); ctx.quadraticCurveTo(0, -11, L.spine / 2, -3); ctx.stroke();   // curled back
+  ctx.lineWidth = L.lw; ctx.beginPath(); ctx.moveTo(L.spine / 2 - 2, -2); ctx.lineTo(L.spine / 2 + 4, -1); ctx.stroke();   // head on the paws
+  ctx.font = '700 7px "Segoe UI",sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.textAlign = 'center';
+  ctx.fillText('z', L.spine / 2 + 4 + Math.sin(G.time) * 1.5, -12 - (G.time * 4 % 6));
   screen();
 }
 
@@ -78,6 +93,12 @@ function animalShape(kind, L, phase, moving, eating, bite, hit, tame, antlers) {
   if (kind === 'wolf') { X.lineWidth = L.lw * 1.25; X.beginPath(); X.moveTo(hip[0], hip[1]); X.quadraticCurveTo(hip[0] - 6, hip[1] + 1, hip[0] - 9, hip[1] + (gallop ? -1 : 5)); X.stroke(); }
   else if (kind === 'deer') { X.lineWidth = L.lw * .8; line([hip, [hip[0] - 2.5, hip[1] - 2.5]]); }
   else if (kind === 'boar') { X.lineWidth = 1.2; X.beginPath(); X.moveTo(hip[0], hip[1]); X.quadraticCurveTo(hip[0] - 3, hip[1] - 3, hip[0] - 2.5, hip[1] + 1); X.stroke(); }
+  else if (kind === 'fox') {   // a big brush of a tail, white at the tip
+    X.lineWidth = L.lw * 2.2; X.beginPath(); X.moveTo(hip[0], hip[1]); X.quadraticCurveTo(hip[0] - 7, hip[1] - 1, hip[0] - 11, hip[1] + (gallop ? -3 : 2)); X.stroke();
+    X.strokeStyle = '#f2ede2'; X.lineWidth = L.lw * 1.6; X.beginPath(); X.moveTo(hip[0] - 9.5, hip[1] + (gallop ? -2.4 : 1.6)); X.lineTo(hip[0] - 11.5, hip[1] + (gallop ? -3.2 : 2.2)); X.stroke();
+    X.strokeStyle = rgb(ink);
+  } else if (kind === 'goat') { X.lineWidth = L.lw * .9; line([hip, [hip[0] - 1.5, hip[1] - 3]]); }
+  else if (kind === 'bear') { X.lineWidth = L.lw; line([hip, [hip[0] - 2, hip[1] + .5]]); }
   else { X.fillStyle = '#efe8dc'; X.beginPath(); X.arc(hip[0] - 1.2, hip[1] - .6, 1.4, 0, TAU); X.fill(); }
   // spine: one bold stroke, arched for rabbits, heavy for boars
   X.lineWidth = L.lw * (L.heavy || 1.5);
@@ -118,6 +139,19 @@ function animalShape(kind, L, phase, moving, eating, bite, hit, tame, antlers) {
     X.strokeStyle = '#efe6cf'; X.lineWidth = 1.2;
     X.beginPath(); const t0 = at(5.2, 1.4), t1 = at(6.4, 3), t2 = at(7.2, 1.2); X.moveTo(t0[0], t0[1]); X.quadraticCurveTo(t1[0], t1[1], t2[0], t2[1]); X.stroke();   // tusk
     X.strokeStyle = rgb(ink); X.lineWidth = 1.2; line([at(-.5, -2.8), at(-1.6, -4.6)]);
+  } else if (kind === 'goat') {   // narrow face, swept-back horns, a beard
+    fillPoly([at(-1, -1.6), at(1.5, -1.6), at(5, -.2), at(4.8, .9), at(1, 1.4), at(-1, 1.2)]);
+    X.strokeStyle = '#6b5f50'; X.lineWidth = 1.5;
+    X.beginPath(); const h0 = at(.4, -1.5), h1 = at(-3.5, -5), h2 = at(-5, -2.5); X.moveTo(h0[0], h0[1]); X.quadraticCurveTo(h1[0], h1[1], h2[0], h2[1]); X.stroke();
+    X.strokeStyle = rgb(ink); X.lineWidth = 1.1; line([at(3.5, 1), at(3, 3.6)]);   // beard
+    line([at(-.5, -.6), at(-2.8, .6)]);   // ear, out to the side
+  } else if (kind === 'bear') {   // a broad heavy head, short muzzle, small ears
+    fillPoly([at(-2.5, -3.2), at(2.5, -3.4), at(6.5, -1.4), at(7, .8), at(3, 2.8), at(-2.5, 2.6)]);
+    fillPoly([at(-1.8, -3), at(-1, -5.4), at(.4, -3.2)]);
+  } else if (kind === 'fox') {   // a sharp narrow snout, tall pointed ears, a white chin
+    fillPoly([at(-1.2, -1.8), at(2, -1.9), at(6.5, -.3), at(6.3, .4), at(2, 1.3), at(-1, 1.4)]);
+    fillPoly([at(-.6, -1.6), at(.2, -5.4), at(1.4, -1.7)]);
+    X.fillStyle = '#f2ede2'; fillPoly([at(2.2, .6), at(5.8, .4), at(2.4, 1.3)]); X.fillStyle = rgb(ink);
   } else {   // rabbit: a small pointed head and two long ears laid back
     fillPoly([at(-1, -1.4), at(1.5, -1.4), at(3.2, 0), at(1.5, 1.3), at(-1, 1.2)]);
     X.lineWidth = 1.5; line([at(0, -1.2), at(-4.5, -6.5)]); line([at(.8, -1.2), at(-2.6, -7.2)]);

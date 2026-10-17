@@ -6,12 +6,17 @@ import { moveCollide } from '../../shared/motion.js';
 import { YEAR, rnd, pick } from './util.js';
 
 export const KINDS = {
-  deer:   { walk: 30, run: 98, alert: 80, hp: .8, meat: 6, fur: 1, herd: [3, 6], life: 14, cap: 14, litter: 1, prey: true, diet: 'plants' },
-  rabbit: { walk: 22, run: 105, alert: 50, hp: .25, meat: 2, fur: 1, herd: [1, 3], life: 6, cap: 12, litter: 3, prey: true, diet: 'plants' },
-  boar:   { walk: 24, run: 82, alert: 55, hp: 1.3, meat: 8, fur: 1, herd: [1, 3], life: 12, cap: 8, litter: 2, bite: .08, diet: 'plants' },
-  wolf:   { walk: 36, run: 108, alert: 95, hp: .9, meat: 3, fur: 2, herd: [2, 4], life: 11, cap: 5, litter: 2, bite: .06, predator: true, diet: 'meat' },
+  deer:   { walk: 30, run: 98, alert: 80, hp: .8, meat: 6, fur: 1, herd: [3, 6], life: 14, cap: 20, litter: 1, prey: true, diet: 'plants' },
+  rabbit: { walk: 22, run: 105, alert: 50, hp: .25, meat: 2, fur: 1, herd: [1, 3], life: 6, cap: 18, litter: 3, prey: true, diet: 'plants', small: true },
+  boar:   { walk: 24, run: 82, alert: 55, hp: 1.3, meat: 8, fur: 1, herd: [1, 3], life: 12, cap: 11, litter: 2, bite: .08, diet: 'plants' },
+  goat:   { walk: 26, run: 92, alert: 60, hp: .7, meat: 5, fur: 1, herd: [3, 7], life: 13, cap: 18, litter: 2, prey: true, diet: 'plants', milk: true, wool: true },
+  wolf:   { walk: 36, run: 108, alert: 95, hp: .9, meat: 3, fur: 2, herd: [2, 4], life: 11, cap: 7, litter: 2, bite: .06, predator: true, diet: 'meat' },
+  bear:   { walk: 26, run: 96, alert: 70, hp: 2.6, meat: 14, fur: 3, herd: [1, 1], life: 25, cap: 3, litter: 1, bite: .16, predator: true, diet: 'meat', big: true, sleeps: true },
+  fox:    { walk: 30, run: 112, alert: 85, hp: .35, meat: 1, fur: 1, herd: [1, 2], life: 8, cap: 7, litter: 2, bite: .03, predator: true, diet: 'meat', small: true },
 };
-const MIN_AROUND = { deer: 8, rabbit: 8, boar: 4, wolf: 3 };
+const MIN_AROUND = { deer: 10, rabbit: 10, boar: 5, goat: 7, wolf: 4, bear: 1, fox: 3 };
+// what each hunter goes after (foxes only small game; bears anything)
+const PREY = { wolf: k => k === 'deer' || k === 'rabbit' || k === 'goat', bear: k => KINDS[k].prey, fox: k => k === 'rabbit' };
 
 export function createAnimals(world, S, x) {
   const env = x.env;
@@ -35,6 +40,8 @@ export function createAnimals(world, S, x) {
       const m = world.moist(px, pz), tp = world.temp(px, pz);
       if (k === 'wolf' && m < .5 && tp > .45) continue;          // wolves keep to forests and the cold
       if ((k === 'deer' || k === 'rabbit') && tp < world.SNOW) continue;
+      if (k === 'goat' && world.rocky(px, pz) < .5) continue;            // goats keep to rocky hills
+      if (k === 'bear' && m < .55) continue;                              // bears to deep forest
       const [lo, hi] = KINDS[k].herd, n = lo + Math.floor(rnd() * (hi - lo + 1));
       for (let i = 0; i < n; i++) {
         const q = world.landNear(px, pz, 0, 40);
@@ -49,6 +56,9 @@ export function createAnimals(world, S, x) {
     for (let i = 0; i < Math.round(9 * k); i++) spawnHerd('rabbit', cx, cz, 120, 900);
     for (let i = 0; i < Math.round(4 * k); i++) spawnHerd('boar', cx, cz, 300, 1100);
     for (let i = 0; i < Math.round(2 * k); i++) spawnHerd('wolf', cx, cz, 700, 1500);
+    for (let i = 0; i < Math.round(5 * k); i++) spawnHerd('goat', cx, cz, 300, 1300);
+    for (let i = 0; i < Math.round(1 * k); i++) spawnHerd('bear', cx, cz, 900, 1800);
+    for (let i = 0; i < Math.round(3 * k); i++) spawnHerd('fox', cx, cz, 400, 1300);
   }
 
   function die(a, cause) {
@@ -57,6 +67,7 @@ export function createAnimals(world, S, x) {
     S.animals.splice(i, 1);
     const K = KINDS[a.k], young = a.age < 1;
     S.corpses.push({ id: a.id, k: a.k, x: a.x, z: a.z, h: a.h, t0: S.time, meat: Math.ceil(K.meat * (young ? .5 : 1)), fur: K.fur, inv: {}, cause, owner: a.owner });
+    if (K.big && cause === 'hunted') x.log('hunt', `🐻 A ${a.k} was brought down`);
   }
   // returns true when the animal dies of it
   function hurt(a, dmg, by) {
@@ -65,7 +76,7 @@ export function createAnimals(world, S, x) {
     if (by) {
       a.threat = by;
       // boars stand and fight; a wolf only does when it is starving or cornered with nothing to lose
-      if (KINDS[a.k].bite && a.hp > KINDS[a.k].hp * .3 && (a.k !== 'wolf' || a.hunger > .9)) { a.state = 'fight'; a.t = 8; }
+      if (KINDS[a.k].bite && !KINDS[a.k].small && a.hp > KINDS[a.k].hp * .3 && (a.k !== 'wolf' || a.hunger > .9)) { a.state = 'fight'; a.t = 8; }
       else { a.state = 'flee'; a.t = 4; }
     }
     if (a.hp <= 0) { die(a, by ? 'hunted' : 'wounds'); return true; }
@@ -86,12 +97,21 @@ export function createAnimals(world, S, x) {
     a.vx += (vx - a.vx) * damp(6, dt); a.vz += (vz - a.vz) * damp(6, dt);
     if (Math.abs(a.vx) + Math.abs(a.vz) < .5) return { d, hit: false };   // standing still: nothing to collide with
     if (Math.hypot(a.vx, a.vz) > 2) a.h += angDiff(a.h, Math.atan2(a.vz, a.vx)) * damp(8, dt);
+    // far from anyone: no trees or rocks to bump into, only water stops them (nobody is watching)
+    if (a.far) {
+      const nx = a.x + a.vx * dt, nz = a.z + a.vz * dt;
+      if (world.blocked(nx, nz)) { a.vx = a.vz = 0; return { d, hit: true }; }
+      a.x = nx; a.z = nz;
+      return { d, hit: false };
+    }
     const hit = moveCollide(world, a, dt, 4);
     return { d, hit };
   }
   const trusts = (a, p) => a.owner === p.id || (a.trust[p.id] || 0) >= .2;
 
   let checkT = 0, popT = 0, lodT = 2, frame = 0, wolves = [];
+  // a bear in its den all winter
+  const asleepNow = (a, K) => K.sleeps && !a.owner && env.season() === 3 && a.state !== 'fight';
   function think(a) {
     const K = KINDS[a.k];
     // threats: people (unless trusted), wolves for prey, wildfire for everyone
@@ -101,7 +121,7 @@ export function createAnimals(world, S, x) {
       const alert = K.alert * (p.sneaking ? .35 : 1) * (x.night() > .5 ? .7 : 1);
       if (d < alert && d < td && !(K.predator && a.hunger > .6)) { threat = p; td = d; }
     });
-    if (K.prey) for (const w of wolves) if ( Math.abs(w.x - a.x) < 120 && Math.abs(w.z - a.z) < 120) { const d = near(a, w); if (d < 110 && d < td) { threat = w; td = d; } }
+    if (K.prey) for (const w of wolves) if (PREY[w.k](a.k) && Math.abs(w.x - a.x) < 120 && Math.abs(w.z - a.z) < 120) { const d = near(a, w); if (d < 110 && d < td) { threat = w; td = d; } }
     for (const f of S.fires) if (f.wild && Math.abs(f.x - a.x) < 90 && Math.abs(f.z - a.z) < 90) { threat = f; td = near(a, f); }
     if (threat && a.state !== 'fight' && !(a.owner && threat === x.byId(a.owner))) { a.state = 'flee'; a.threat = threat; a.t = 3 + rnd() * 2; return; }
     if (a.owner) {
@@ -120,9 +140,9 @@ export function createAnimals(world, S, x) {
         let best = null, bd = 320;
         for (const c of S.corpses) if (c.meat > 0 && Math.abs(c.x - a.x) < bd && Math.abs(c.z - a.z) < bd) { const d = near(a, c); if (d < bd) { bd = d; best = c; } }
         if (best) { a.state = 'eat'; a.prey = best; return; }
-        for (const p of S.animals) if (KINDS[p.k].prey && !p.owner && Math.abs(p.x - a.x) < 280 && Math.abs(p.z - a.z) < 280) { const d = near(a, p); if (d < bd) { bd = d; best = p; } }
+        for (const p of S.animals) if (KINDS[p.k].prey && PREY[a.k](p.k) && !p.owner && Math.abs(p.x - a.x) < 280 && Math.abs(p.z - a.z) < 280) { const d = near(a, p); if (d < bd) { bd = d; best = p; } }
         // like real wolves they pick the weak: a lone child, or someone wounded, sick or old
-        if (!best && a.hunger > .95 && x.night() > .5) x.peopleNear(a.x, a.z, 220, (p, d) => {
+        if (!best && !K.small && a.hunger > .95 && (x.night() > .5 || K.big)) x.peopleNear(a.x, a.z, 220, (p, d) => {
           if (p.held || d > bd || (p.health > .6 && p.age >= 12 && p.age < 55)) return;
           let company = 0;
           x.peopleNear(p.x, p.z, 70, () => company++);
@@ -140,7 +160,7 @@ export function createAnimals(world, S, x) {
   function tick(dt0) {
     const yearIdx = Math.floor(S.time / YEAR);
     const thinkNow = (checkT += dt0) >= .5;
-    if (thinkNow) { checkT = 0; wolves = S.animals.filter(w => w.k === 'wolf' && !w.owner); }
+    if (thinkNow) { checkT = 0; wolves = S.animals.filter(w => KINDS[w.k].predator && !w.owner && !asleepNow(w, KINDS[w.k])); }
     if ((lodT += dt0) >= 2) {
       lodT = 0;
       for (const a of S.animals) { let seen = false; x.peopleNear(a.x, a.z, 800, () => { seen = true; }); a.far = !seen && !a.owner; }
@@ -149,9 +169,10 @@ export function createAnimals(world, S, x) {
     for (let i = S.animals.length - 1; i >= 0; i--) {
       const a = S.animals[i], K = KINDS[a.k];
       let dt = dt0;
-      if (a.far) { if ((frame + a.id) % 3) continue; dt = dt0 * 3; }
+      if (a.far) { if ((frame + a.id) % 6) continue; dt = dt0 * 6; }
       a.age += dt / YEAR;
-      a.hunger += dt / (K.predator ? 220 : 400);
+      if (asleepNow(a, K)) { a.act = 'sleep'; a.vx = a.vz = 0; continue; }
+      a.hunger += dt / (K.predator ? 220 : 400) * (env.season() === 3 && !a.owner ? 1 + (S.winterSev || 0) * 9 : 1);
       if (a.age > K.life * (.8 + (a.id % 7) * .06)) { die(a, 'old age'); continue; }
       if (a.hunger > 1.6 && !a.owner) { die(a, 'starvation'); continue; }
       if (thinkNow) think(a);
@@ -205,7 +226,7 @@ export function createAnimals(world, S, x) {
         a.bred = yearIdx;
         let n = 0;
         for (const b of S.animals) if (b.k === a.k && Math.abs(b.x - a.x) < 400 && Math.abs(b.z - a.z) < 400) n++;
-        if (n < K.cap * (a.owner ? 1.5 : 1) && S.animals.length < 220) for (let k = 0; k < 1 + Math.floor(rnd() * K.litter); k++)
+        if (n < K.cap * (a.owner ? 1.5 : 1) && S.animals.length < 380) for (let k = 0; k < 1 + Math.floor(rnd() * K.litter); k++)
           spawn(a.k, a.x + (rnd() - .5) * 10, a.z + (rnd() - .5) * 10, { age: 0, home: { ...a.home }, owner: a.owner, trust: a.owner ? { [a.owner]: .7 } : {} });
       }
     }
