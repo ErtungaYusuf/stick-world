@@ -127,6 +127,32 @@ How people come to make things, without being told: a tool takes credit for what
 worth what the recipes they know turn it into, an untested material has the value of finding out (curiosity, much
 stronger in the young), and a recipe seen being made is often learned on the spot.
 
+## Order and disorder, passed down
+
+- **Foresight**: choices weigh how the body will be 25 s ahead, including the health an empty stomach or a dry throat
+  will cost; eating or drinking (really) spares it. Choices are weighed per unit of time, walk included.
+- **Searching**: with a need and no known way to meet it, setting out to look is worth what finding would bring.
+  Places they could not reach are not retried for two minutes.
+- **Society**: tribute (demand → the other decides to yield or refuse, from experience), rulers, revolts against
+  leaders, revenge as a purpose, orphans and trauma, "order" as a purpose, trade by each side's own valuation,
+  music, writing on standing stones. Every person keeps a short life story; great events go into a chronicle.
+- **Passed down**: children take in part of what their parents learned (effects, recipes, likes, places). A people's
+  culture is pooled and saved in the database (it survives world resets); founders and families arriving from beyond
+  start from it.
+- **Dangers stay**: predators, winters, plagues are never softened. Beasts keep away from fire and lights, people may
+  defend each other or gang up, and those choices are learned like any other.
+
+## Thousands of people
+
+- People nobody is watching (no player within ~1100) are stepped a third as often, three times as long. They still look
+  around every second: looking less often, or stepping more than ~0.3 s, measurably changes lives (fewer births).
+- Buildings, fires, bodies and crops sit in a spatial index; who-loves-whom, names, holdings and item values are
+  computed once per second; water lookups are cached. Each viewer is sent only what is around their camera.
+- `node scripts/perf.mjs 3000` fills a world with 3000 grown people and reports the cost (about 85 µs per person per
+  simulated second here, so 3000 people use roughly a quarter of a core at normal speed).
+- `node scripts/history.mjs <seed> 2000` runs a world for 2000 years headless (resumable); `node scripts/annals.mjs`
+  turns the runs in `data/history/` into a report page.
+
 ## Layout
 
 ```

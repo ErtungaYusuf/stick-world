@@ -97,8 +97,8 @@ export function createAnimals(world, S, x) {
     a.vx += (vx - a.vx) * damp(6, dt); a.vz += (vz - a.vz) * damp(6, dt);
     if (Math.abs(a.vx) + Math.abs(a.vz) < .5) return { d, hit: false };   // standing still: nothing to collide with
     if (Math.hypot(a.vx, a.vz) > 2) a.h += angDiff(a.h, Math.atan2(a.vz, a.vx)) * damp(8, dt);
-    // far from anyone: no trees or rocks to bump into, only water stops them (nobody is watching)
-    if (a.far) {
+    // where no player is looking: no trees or rocks to bump into, only water stops them
+    if (a.far || a.unseen) {
       const nx = a.x + a.vx * dt, nz = a.z + a.vz * dt;
       if (world.blocked(nx, nz)) { a.vx = a.vz = 0; return { d, hit: true }; }
       a.x = nx; a.z = nz;
@@ -167,7 +167,11 @@ export function createAnimals(world, S, x) {
     if (thinkNow) { checkT = 0; wolves = S.animals.filter(w => KINDS[w.k].predator && !w.owner && !asleepNow(w, KINDS[w.k])); }
     if ((lodT += dt0) >= 2) {
       lodT = 0;
-      for (const a of S.animals) { let seen = false; x.peopleNear(a.x, a.z, 800, () => { seen = true; }); a.far = !seen && !a.owner; }
+      const eyes = [...S.avatars.values()].filter(v => v.online && v.alive);
+      for (const a of S.animals) {
+        let seen = false; x.peopleNear(a.x, a.z, 800, () => { seen = true; }); a.far = !seen && !a.owner;
+        a.unseen = !eyes.some(v => Math.abs(v.x - a.x) < 1100 && Math.abs(v.z - a.z) < 1100);
+      }
     }
     frame++;
     for (let i = S.animals.length - 1; i >= 0; i--) {
