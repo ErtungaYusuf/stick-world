@@ -8,14 +8,16 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const H = join(ROOT, 'data', 'history');
-const out = process.argv[2] || join(H, 'summary.json');
+// node scripts/chronicle.mjs [seed …] [out.json] — only the given seeds, or every world in data/history
+const args = process.argv.slice(2), only = args.filter(a => /^\d+$/.test(a)).map(Number);
+const out = args.find(a => a.endsWith('.json')) || join(H, 'summary.json');
 const lines = f => existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : [];
 
 // what makes history: the kinds of events kept in full, and those kept only the first few times
 const GREAT = new Set(['revolt', 'war', 'arrival', 'winter', 'religion', 'leader', 'culture', 'settle', 'band', 'explosion', 'evolution']);
 const FIRSTS = new Set(['invention', 'discovery', 'farming', 'herding', 'trade', 'cannibal', 'burial', 'healer', 'build', 'love', 'hunt', 'fire']);
 const worlds = [];
-for (const seed of readdirSync(H).filter(d => /^\d+$/.test(d))) {
+for (const seed of readdirSync(H).filter(d => /^\d+$/.test(d) && (!only.length || only.includes(+d)))) {
   const years = lines(join(H, seed, 'years.jsonl'));
   if (!years.length) continue;
   const events = lines(join(H, seed, 'events.jsonl'));

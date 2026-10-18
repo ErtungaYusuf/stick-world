@@ -98,7 +98,7 @@ footer { color: var(--ink-soft); font-size: 13px; border-top: 1px solid var(--ru
 <div class="wrap">
   <header>
     <span class="label">Stick World · the long runs</span>
-    <h1>Annals of Six Worlds</h1>
+    <h1 id="h1">Annals of the Worlds</h1>
     <p class="lede" id="lede"></p>
     <span class="status" id="status"></span>
   </header>
@@ -137,7 +137,8 @@ const names = ['Ashfall', 'Riverholm', 'Greywater', 'Hollow Pines', 'Saltmarsh',
 W.forEach((w, i) => { w.name = names[i % names.length]; });
 
 const minYears = Math.min(...W.map(w => w.years)), maxYears = Math.max(...W.map(w => w.years));
-$('lede').textContent = `Six worlds started from the same rules: 36 founders, nothing told what to do. Each runs on its own, year by year, until year 2000. What you see is what emerged: who led, who rose against them, which crafts were found and lost, which winters killed.`;
+$('h1').textContent = `Annals of ${['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'][W.length - 1] || W.length} World${W.length > 1 ? 's' : ''}`;
+$('lede').textContent = `${W.length} worlds started from the same rules: 36 founders, nothing told what to do. Each runs on its own, year by year, until year 2000. What you see is what emerged: who led, who rose against them, which crafts were found and lost, which winters killed.`;
 $('status').textContent = `Snapshot ${new Date(DATA.made).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })} · worlds have reached year ${minYears}${minYears !== maxYears ? '–' + maxYears : ''} of 2000 and are still running`;
 $('foot').innerHTML = `How it is made: each world is a headless run of the same simulation as the game (server/life), saving one line of numbers per year, every logged event and the story of everyone notable when they die. Population, technology and the annals are read straight from those files. Families from beyond the hills arrive only when a land is nearly empty. Seeds: ${W.map(w => `${esc(w.name)} ${w.seed}`).join(' · ')}.`;
 
