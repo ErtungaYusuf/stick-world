@@ -109,6 +109,7 @@ export function openDb(file) {
     },
     // the saved world, or null for a brand new one
     load() { const r = q.getMeta.get('life'); return r ? JSON.parse(r.value) : null; },
-    reset() { db.exec('DELETE FROM events; DELETE FROM people; DELETE FROM meta;'); },
+    // a new world forgets everything except the culture (what peoples before it learned)
+    reset() { db.exec("DELETE FROM events; DELETE FROM people; DELETE FROM meta WHERE key != 'culture';"); },
   };
 }

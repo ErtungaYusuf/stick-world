@@ -149,8 +149,14 @@ export function createSociety(S, x) {
   function settlements() {
     const pts = [...S.structs.filter(s => s.k !== 'grave'), ...S.fires.filter(f => !f.wild).map(f => ({ ...f, k: 'fire' }))];
     const parent = pts.map((_, i) => i), find = i => parent[i] === i ? i : (parent[i] = find(parent[i]));
-    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++)
-      if (Math.abs(pts[i].x - pts[j].x) < 150 && Math.abs(pts[i].z - pts[j].z) < 150) parent[find(i)] = find(j);
+    // join everything within 150 of each other — comparing only neighbouring cells, not every pair
+    const cells = new Map(), ck = (i, j) => i * 100003 + j;
+    pts.forEach((p, i) => { const k = ck(Math.floor(p.x / 150), Math.floor(p.z / 150)); if (!cells.has(k)) cells.set(k, []); cells.get(k).push(i); });
+    pts.forEach((p, i) => {
+      const ci = Math.floor(p.x / 150), cj = Math.floor(p.z / 150);
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) for (const j of cells.get(ck(ci + di, cj + dj)) || [])
+        if (j > i && Math.abs(p.x - pts[j].x) < 150 && Math.abs(p.z - pts[j].z) < 150) parent[find(i)] = find(j);
+    });
     const groups = new Map();
     pts.forEach((p, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(p); });
     const next = [];

@@ -2,7 +2,7 @@
 // These are the laws of nature of Stick World. People only ever see their effects.
 import { TAU, clamp, smooth, frac } from '../../shared/core.js';
 import { WATER, CH } from '../../shared/world.js';
-import { YEAR, rnd, pick } from './util.js';
+import { YEAR, rnd, pick, createGrid } from './util.js';
 
 export const SEASON_NAMES = ['spring', 'summer', 'autumn', 'winter'];
 const ROT_PERSON = 540, ROT_ANIMAL = 300;          // seconds until a body is bare bones
@@ -36,6 +36,19 @@ export function conceptOfObj(o) {
 }
 
 export function createEnv(world, S, x) {
+  // ───────── where things are ─────────
+  // Buildings, fires, bodies and crops on a grid, rebuilt twice a (simulated) second: thousands of people ask
+  // "what is near me" every second, and walking every list for each of them grows with the square of a town.
+  const idx = { structs: createGrid(96), fires: createGrid(96), corpses: createGrid(96), crops: createGrid(96) };
+  let idxAt = -1;
+  function near(kind, px, pz, r, fn) {
+    if (S.time - idxAt >= .5 || S.time < idxAt) {
+      idxAt = S.time;
+      for (const k in idx) { idx[k].clear(); for (const o of S[k]) idx[k].add(o); }
+    }
+    idx[kind].near(px, pz, r, fn);
+  }
+  const reindex = () => { idxAt = -1; };
   // ───────── time of year, weather, temperature ─────────
   const yearFrac = () => frac(S.time / YEAR);
   const season = () => Math.floor(yearFrac() * 4);
@@ -204,7 +217,7 @@ export function createEnv(world, S, x) {
       if (f.fuel <= 0) continue;
       if (f.wild) {
         treesNear(f.x, f.z, 36, (o, d) => { if (d < 36 && rnd() < .1 * dry) igniteTree(o); });
-        for (const s of S.structs) if (BURNABLE[s.k] && !s.burning && Math.hypot(s.x - f.x, s.z - f.z) < 32 && rnd() < .14 * dry) igniteStruct(s);
+        near('structs', f.x, f.z, 32, s => { if (BURNABLE[s.k] && !s.burning && rnd() < .14 * dry) igniteStruct(s); });
         x.burnNear(f.x, f.z, 16);
       } else if (f.fuel > 90) treesNear(f.x, f.z, 20, (o, d) => { if (d < 20 && rnd() < .0008 * dry) igniteTree(o); });
     }
@@ -223,11 +236,11 @@ export function createEnv(world, S, x) {
   // warmth bonus from fires at a spot
   function fireWarmth(px, pz) {
     let t = 0;
-    for (const f of S.fires) {
-      if (f.fuel <= 0) continue;
-      const R = f.wild ? 95 : 75, d = Math.hypot(f.x - px, f.z - pz);
+    near('fires', px, pz, 95, (f, d) => {
+      if (f.fuel <= 0) return;
+      const R = f.wild ? 95 : 75;
       if (d < R) t += (f.wild ? .75 : .55) * (1 - d / R);
-    }
+    });
     return Math.min(t, .8);
   }
 
@@ -235,12 +248,10 @@ export function createEnv(world, S, x) {
   const rotOf = c => (S.time - c.t0) / (c.k === 'person' ? ROT_PERSON : ROT_ANIMAL);
   function smellAt(px, pz) {
     let s = 0;
-    for (const c of S.corpses) {
-      const d = Math.hypot(c.x - px, c.z - pz);
-      if (d > 110) continue;
+    near('corpses', px, pz, 110, (c, d) => {
       const r = rotOf(c);
       s += Math.min(1, r) * (r > 1.6 ? .25 : 1) * (1 - d / 110) * (c.k === 'person' ? 1 : .7);
-    }
+    });
     return Math.min(1.5, s);
   }
   function newStrain(from) {
@@ -267,15 +278,15 @@ export function createEnv(world, S, x) {
   }
   // breathing near rotting bodies; drinking water that bodies lie beside
   function exposure(e) {
-    for (const c of S.corpses) {
+    near('corpses', e.x, e.z, 50, c => {
       const r = rotOf(c);
-      if (r < .3 || Math.abs(c.x - e.x) > 35 || Math.abs(c.z - e.z) > 35) continue;
-      if (rnd() < .0025 * Math.min(r, 1.5)) infect(e, corpseStrain(c));
-    }
+      if (r >= .3 && Math.abs(c.x - e.x) <= 35 && Math.abs(c.z - e.z) <= 35 && rnd() < .0025 * Math.min(r, 1.5)) infect(e, corpseStrain(c));
+    });
   }
   function waterGerm(px, pz) {
-    for (const c of S.corpses) if (rotOf(c) > .2 && Math.hypot(c.x - px, c.z - pz) < 90 && rnd() < .25) return corpseStrain(c);
-    return 0;
+    let g = 0;
+    near('corpses', px, pz, 90, c => { if (!g && rotOf(c) > .2 && rnd() < .25) g = corpseStrain(c); });
+    return g;
   }
   function corpses() {
     for (let i = S.corpses.length - 1; i >= 0; i--) if (rotOf(S.corpses[i]) > 3) S.corpses.splice(i, 1);
@@ -284,14 +295,14 @@ export function createEnv(world, S, x) {
   // ───────── buildings and crops ─────────
   function shelterAt(px, pz) {
     let b = 0;
-    for (const s of S.structs) {
-      if ((s.k !== 'hut' && s.k !== 'house' && s.k !== 'hall') || (s.prog ?? 1) < 1) continue;
+    near('structs', px, pz, 40, s => {
+      if ((s.k !== 'hut' && s.k !== 'house' && s.k !== 'hall') || (s.prog ?? 1) < 1) return;
       const r = s.k === 'hall' ? 28 : 18;
       if (Math.abs(s.x - px) < r && Math.abs(s.z - pz) < r) b = Math.max(b, s.k === 'hall' ? .55 : s.k === 'house' ? .45 : .32);
-    }
+    });
     return b;
   }
-  const damNear = (px, pz) => S.structs.some(s => s.k === 'dam' && (s.prog ?? 1) >= 1 && Math.hypot(s.x - px, s.z - pz) < 160);
+  const damNear = (px, pz) => { let y = false; near('structs', px, pz, 160, s => { if (s.k === 'dam' && (s.prog ?? 1) >= 1) y = true; }); return y; };
   const cropRipe = c => growing() && S.time >= c.next;
 
   function tick(dt) {
@@ -305,7 +316,7 @@ export function createEnv(world, S, x) {
   }
 
   return {
-    season, seasonTemp, night, airTemp, frozenAt, growing, nearestShore, ripe, harvest, sticksLeft, takeStick, fell,
+    near, reindex, season, seasonTemp, night, airTemp, frozenAt, growing, nearestShore, ripe, harvest, sticksLeft, takeStick, fell,
     oreLeft, takeOre, objById, regrowYearly, plantTree, replant, felledList, pickedIds, makeFire, igniteTree, igniteStruct, treesNear, fireWarmth,
     rotOf, smellAt, newStrain, corpseStrain, infect, exposure, waterGerm, shelterAt, damNear, cropRipe, tick, perSecond,
   };

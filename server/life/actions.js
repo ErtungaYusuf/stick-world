@@ -47,7 +47,8 @@ export function createActions(x) {
 
   def({ id: 'wander', minAge: 3, reach: 10, dur: () => 0, label: () => 'Wandering', anim: () => null,
     cands(e, P, out) {
-      const p = x.landAround(e.x, e.z, 80, e.age < 10 ? 110 : 280);
+      // searching for water or food takes people much further than a stroll
+      const p = x.landAround(e.x, e.z, e.searching ? 250 : 80, e.age < 10 ? 110 : e.searching ? 700 : 280);
       if (p) out.push(C(this, 'land', { x: p.x, z: p.z, d: Math.hypot(p.x - e.x, p.z - e.z) }));
     } });
 

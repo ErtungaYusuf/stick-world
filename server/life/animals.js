@@ -108,6 +108,9 @@ export function createAnimals(world, S, x) {
     return { d, hit };
   }
   const trusts = (a, p) => a.owner === p.id || (a.trust[p.id] || 0) >= .2;
+  // every wild beast keeps away from fire: a burning hearth, a torch or a lamp in someone's hand
+  const hearthNear = (px, pz, r) => { let y = false; env.near('fires', px, pz, r * 1.42, f => { if (!f.wild && f.fuel > 0 && Math.abs(f.x - px) < r && Math.abs(f.z - pz) < r) y = true; }); return y; };
+  const carriesLight = p => p.inv && (p.inv.torch || p.inv.lamp || p.inv.pitch || p.inv.candle);
 
   let checkT = 0, popT = 0, lodT = 2, frame = 0, wolves = [];
   // a bear in its den all winter
@@ -122,7 +125,7 @@ export function createAnimals(world, S, x) {
       if (d < alert && d < td && !(K.predator && a.hunger > .6)) { threat = p; td = d; }
     });
     if (K.prey) for (const w of wolves) if (PREY[w.k](a.k) && Math.abs(w.x - a.x) < 120 && Math.abs(w.z - a.z) < 120) { const d = near(a, w); if (d < 110 && d < td) { threat = w; td = d; } }
-    for (const f of S.fires) if (f.wild && Math.abs(f.x - a.x) < 90 && Math.abs(f.z - a.z) < 90) { threat = f; td = near(a, f); }
+    if (!a.owner) env.near('fires', a.x, a.z, 128, (f, d) => { if ((f.wild ? 90 : f.fuel > 0 ? 55 : 0) > Math.max(Math.abs(f.x - a.x), Math.abs(f.z - a.z))) { threat = f; td = d; } });
     if (threat && a.state !== 'fight' && !(a.owner && threat === x.byId(a.owner))) { a.state = 'flee'; a.threat = threat; a.t = 3 + rnd() * 2; return; }
     if (a.owner) {
       const o = x.byId(a.owner);
@@ -138,12 +141,13 @@ export function createAnimals(world, S, x) {
       if (a.hunger > .5 && a.state !== 'fight') {
         // a carcass first, then the nearest prey; a lone grown-up person only when starving
         let best = null, bd = 320;
-        for (const c of S.corpses) if (c.meat > 0 && Math.abs(c.x - a.x) < bd && Math.abs(c.z - a.z) < bd) { const d = near(a, c); if (d < bd) { bd = d; best = c; } }
+        env.near('corpses', a.x, a.z, bd, (c, d) => { if (c.meat > 0 && d < bd) { bd = d; best = c; } });
         if (best) { a.state = 'eat'; a.prey = best; return; }
         for (const p of S.animals) if (KINDS[p.k].prey && PREY[a.k](p.k) && !p.owner && Math.abs(p.x - a.x) < 280 && Math.abs(p.z - a.z) < 280) { const d = near(a, p); if (d < bd) { bd = d; best = p; } }
         // like real wolves they pick the weak: a lone child, or someone wounded, sick or old
         if (!best && !K.small && a.hunger > .95 && (x.night() > .5 || K.big)) x.peopleNear(a.x, a.z, 220, (p, d) => {
           if (p.held || d > bd || (p.health > .6 && p.age >= 12 && p.age < 55)) return;
+          if (carriesLight(p) || hearthNear(p.x, p.z, 110)) return;
           let company = 0;
           x.peopleNear(p.x, p.z, 70, () => company++);
           if (company <= 1) { bd = d; best = p; }

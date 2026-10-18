@@ -11,7 +11,14 @@ export function createWorld(seed) {
   const elev = (x, z) => fbm2(x / 900, z / 900, seed, 4);
   const moist = (x, z) => fbm2(x / 1300 + 50, z / 1300 - 80, seed + 9, 3);
   const rocky = (x, z) => fbm2(x / 650 - 30, z / 650 + 20, seed + 21, 3);
-  const blocked = (x, z) => elev(x, z) < WATER + .004;
+  // water or land, remembered on a 2-unit grid (movement asks this many times a second for the same few places)
+  const wet = new Map();
+  const blocked = (x, z) => {
+    const k = Math.round(x * .5) * 1048576 + Math.round(z * .5);
+    let v = wet.get(k);
+    if (v === undefined) { if (wet.size > 3e6) wet.clear(); v = elev(Math.round(x * .5) * 2, Math.round(z * .5) * 2) < WATER + .004; wet.set(k, v); }
+    return v;
+  };
   // climate: 0 = arctic … 1 = hot. The north (−z) is cold, the south warm, with wobbly borders.
   const temp = (x, z) => Math.max(0, Math.min(1, .66 + z / 2400 + (fbm2(x / 1500 + 9, z / 1500 - 4, seed + 77, 3) - .5) * .7));
   const SNOW = .3;   // below this temperature the ground is snow-covered

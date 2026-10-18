@@ -93,8 +93,11 @@ export function createSim(world, hooks) {
   const busy = p => !!p.task && !['idle', 'wander', 'warm', 'follow'].includes(p.task.A.id);
 
   // ───────── people ─────────
+  let namesAt = -1, namesUsed = new Set();
   function freshName(sex) {
-    const pool = sex === 'M' ? NAMES_M : NAMES_F, used = new Set(S.people.map(p => p.name));
+    const pool = sex === 'M' ? NAMES_M : NAMES_F;
+    if (namesAt !== Math.floor(S.time)) { namesAt = Math.floor(S.time); namesUsed = new Set(S.people.map(p => p.name)); }
+    const used = namesUsed;
     const free = pool.filter(n => !used.has(n));
     return pick(free.length ? free : pool);
   }
@@ -127,7 +130,15 @@ export function createSim(world, hooks) {
     const night = env.night(), lit = night > .6 && (bestItem(e.inv, 'light') || fireNear(e, 60));
     const R = e.age < 6 ? 110 : 190 * (night > .6 && !lit ? .75 : 1);
     const P = { people: [], animals: [], things: new Map(), shore: null, sacred: [], threats: [] };
-    const put = (c, o, d, src) => { let a = P.things.get(c); if (!a) P.things.set(c, a = []); a.push({ o, d, src }); };
+    // the three nearest of each kind, kept as they come (no long lists to sort)
+    const put = (c, o, d, src) => {
+      let a = P.things.get(c);
+      if (!a) { P.things.set(c, [{ o, d, src }]); return; }
+      if (a.length === 3 && d >= a[2].d) return;
+      let i = a.length < 3 ? a.length : 2;
+      while (i > 0 && a[i - 1].d > d) { if (i < 3) a[i] = a[i - 1]; i--; }
+      a[i] = { o, d, src };
+    };
     pgrid.near(e.x, e.z, R, (p, d) => {
       if (p === e) return;
       P.people.push({ p, d });
@@ -150,16 +161,12 @@ export function createSim(world, hooks) {
           const c = conceptOfObj(o);
           if (c) put(c, o, d, 'obj');
         }
-    for (const c of S.corpses) { const d = Math.hypot(c.x - e.x, c.z - e.z); if (d < R) put(env.rotOf(c) > 1 ? 'bones' : c.k === 'person' ? 'corpse' : 'carcass', c, d, 'corpse'); }
-    for (const f of S.fires) { const d = Math.hypot(f.x - e.x, f.z - e.z); if (d < R) put('fire', f, d, 'fire'); }
-    for (const s of S.structs) { const d = Math.hypot(s.x - e.x, s.z - e.z); if (d < R) put(s.k === 'granary' ? 'store' : s.k, s, d, 'struct'); }
-    for (const c of S.crops) { const d = Math.hypot(c.x - e.x, c.z - e.z); if (d < R) put('crop', c, d, 'crop'); }
+    env.near('corpses', e.x, e.z, R, (c, d) => put(env.rotOf(c) > 1 ? 'bones' : c.k === 'person' ? 'corpse' : 'carcass', c, d, 'corpse'));
+    env.near('fires', e.x, e.z, R, (f, d) => put('fire', f, d, 'fire'));
+    env.near('structs', e.x, e.z, R, (s, d) => put(s.k === 'granary' ? 'store' : s.k, s, d, 'struct'));
+    env.near('crops', e.x, e.z, R, (c, d) => put('crop', c, d, 'crop'));
     let novel = 0;
-    for (const [c, a] of P.things) {
-      a.sort((p, q) => p.d - q.d);
-      if (a.length > 3) a.length = 3;
-      if (!e.W.has(c)) { novel++; e.W.set(c, 0); }   // a new kind of thing: curiosity is rewarded
-    }
+    for (const c of P.things.keys()) if (!e.W.has(c)) { novel++; e.W.set(c, 0); }   // a new kind of thing: curiosity is rewarded
     P.shore = env.nearestShore(e.x, e.z, Math.min(R, 170));
     // remembering where things are
     if (P.shore) e.mem.set('river', { x: P.shore.x, z: P.shore.z, t: S.time });
@@ -245,11 +252,27 @@ export function createSim(world, hooks) {
   }
 
   // ───────── purpose ─────────
-  function lovedBy(e) { let s = 0; const k = 'p:' + e.id; for (const p of S.people) if (p !== e) s += M.like(p, k); return s / 100; }
+  // how much everyone else likes each person, summed once a second for all (asking everyone, for everyone, every second, was n²)
+  let lovedAt = -1, loved = new Map();
+  function lovedBy(e) {
+    if (lovedAt !== Math.floor(S.time)) {
+      lovedAt = Math.floor(S.time); loved = new Map();
+      for (const p of S.people) for (const [c, w] of p.W) if (c.charCodeAt(0) === 112 && c.charCodeAt(1) === 58) { const id = +c.slice(2); if (id !== p.id) loved.set(id, (loved.get(id) || 0) + w); }
+    }
+    return (loved.get(e.id) || 0) / 100;
+  }
   function descendants(e) {
     let n = 0;
     for (const id of e.kids) { const c = S.byId.get(id); if (c) n++; const cc = c || null; if (cc) for (const g of cc.kids) if (S.byId.has(g)) n += .5; }
     return n;
+  }
+  let holdAt = -1, held = { owned: new Map(), built: new Map() };
+  function holdings() {
+    if (holdAt !== Math.floor(S.time)) {
+      holdAt = Math.floor(S.time); held = { owned: new Map(), built: new Map() };
+      for (const s of S.structs) { if (s.owner != null) held.owned.set(s.owner, (held.owned.get(s.owner) || 0) + 1); if (s.builder != null) held.built.set(s.builder, (held.built.get(s.builder) || 0) + 1); }
+    }
+    return held;
   }
   function goalValue(e) {
     switch (e.goal.k) {
@@ -259,7 +282,7 @@ export function createSim(world, hooks) {
         for (const c of e.seen.things.keys()) t += M.like(e, c);
         return s / n + t / 100 * .05;
       }
-      case 'wealth': return e.wealth + S.structs.filter(s => s.owner === e.id).length * 1.5;
+      case 'wealth': return e.wealth + (holdings().owned.get(e.id) || 0) * 1.5;
       case 'power': return (S.followers.get(e.id) || 0) + e.feared * .5 + e.obeyed * .5;
       case 'cruelty': { let s = 0, n = 0; for (const { p, d } of e.seen.people) if (d < 150) { s += p.Pnow; n++; } return n ? s / n : 0; }
       case 'kill': return e.stats.kills;
@@ -267,7 +290,7 @@ export function createSim(world, hooks) {
       case 'family': return descendants(e);
       case 'knowledge': { let n = 0; for (const r of e.R.values()) if (r.ok) n += .5; for (const m of e.M.values()) if (m.n >= 2) n += .03; return n; }
       case 'devotion': return (S.believers.get(e.goal.c) || 0) + Math.min(5, e.ven[e.goal.c] || 0) * .2;
-      case 'builder': return S.structs.filter(s => s.builder === e.id).length;
+      case 'builder': return holdings().built.get(e.id) || 0;
       case 'revenge': { const t = e.goal.c && S.byId.get(Number(e.goal.c.slice(2))); return t ? 1 - t.health : 2; }
       case 'order': return (S.followers.get(e.id) || 0) * .4 + e.obeyed * .2 - e.chaos * .4;
     }
@@ -310,12 +333,24 @@ export function createSim(world, hooks) {
   // choices are weighed against how the body will be a little while from now, not just this instant
   // (you drink before you are parched, because getting to the water takes time)
   const HORIZON = 25;
+  const loss = { food: 0, water: 0 };
   function ahead(e) {
     const s = M.stateOf(e, sbuf);
+    // how long until the stomach / the throat is empty, and how much health goes for the rest of the horizon
+    loss.food = Math.max(0, HORIZON - s[M.FOOD] * 140) / 110;
+    loss.water = Math.max(0, HORIZON - s[M.WATER] * 100) / 55;
     s[M.FOOD] = Math.max(0, s[M.FOOD] - HORIZON / 140);
     s[M.WATER] = Math.max(0, s[M.WATER] - HORIZON / 100);
     s[M.ENERGY] = Math.max(0, s[M.ENERGY] - HORIZON / 75);
+    s[M.HEALTH] = Math.max(0, s[M.HEALTH] - loss.food - loss.water - (e.warmth < .15 ? (.15 - e.warmth) * HORIZON / 12 : 0));
     return s;
+  }
+  // what eating or drinking spares: the health that hunger or thirst would have taken
+  // (only real eating or drinking counts: what the stomach or throat actually gets, in proportion)
+  function spared(s0, s) {
+    const ate = s[M.FOOD] - s0[M.FOOD], drank = s[M.WATER] - s0[M.WATER];
+    if (loss.food > 0 && ate > .03) s[M.HEALTH] = Math.min(1, s[M.HEALTH] + loss.food * Math.min(1, ate * 140 / HORIZON));
+    if (loss.water > 0 && drank > .03) s[M.HEALTH] = Math.min(1, s[M.HEALTH] + loss.water * Math.min(1, drank * 100 / HORIZON));
   }
   const magicOf = e => .05 + .35 * (1 - e.tr.iq);
   // what getting a thing is worth right now: the relief of using it, by this person's own model (one step of looking ahead)
@@ -333,6 +368,7 @@ export function createSim(world, hooks) {
       if (m) {
         const d = m.d.slice(), have = e.inv[k] || 0;
         for (let i = 0; i < M.NV; i++) s2[i] = i < M.FELT ? clamp(s0[i] + d[i], 0, 1) : s0[i];
+        spared(s0, s2);
         const now = Math.max(0, p0 - M.painOf(e, s2));
         for (let i = 0; i < M.NV; i++) s2[i] = s0[i];
         s2[use === 'eat' ? M.FOOD : M.WATER] = .3;   // how it will be next time
@@ -367,10 +403,12 @@ export function createSim(world, hooks) {
     return v;
   }
   function score(e, c, s0, p0, magic, memo) {
-    const m = M.predict(e, c.key, c.A.id + ':*');
+    let m = M.predict(e, c.key, c.A.id + ':*');
+    const mT = m ? m.T : null;
     let u = 0, n = 0;
     if (m) {
       for (let i = 0; i < M.NV; i++) s1[i] = i < M.FELT ? clamp(s0[i] + m.d[i], 0, 1) : s0[i];
+      spared(s0, s1);
       u = p0 - M.painOf(e, s1);                                    // expected relief
       u += e.tr.greed * .12 * m.d[M.WEALTH];                       // expected gain
       u += M.GOALS[e.goal.k].drive * m.d[M.GOAL];                  // expected progress toward the purpose
@@ -390,16 +428,36 @@ export function createSim(world, hooks) {
     // the untried is tempting, more so in misery, and far more in the young (play is how children learn the world)
     u += e.tr.curious * .14 / Math.sqrt(1 + n) * (1 + .8 * Math.min(1, p0)) * (1 + 2 * (1 - smooth(8, 24, e.age)));
     u -= c.d * .00015 * (c.mem ? 1.5 : 1);                         // walking there costs a little (its real cost is already in what was learned)
-    return u;
+    // what it brings per unit of time: the same relief sooner is worth more (every animal forages this way).
+    // Time = how long it has taken before (or a guess) plus the walk there.
+    const T = (mT ?? 6) + c.d / 90;
+    return u > 0 ? u / (1 + T / 25) : u;
   }
+  const FOODISH = new Set(['eat', 'pick', 'hunt', 'fish', 'butcher', 'take']);
   function choose(e) {
     const cands = [];
+    e.searching = (e.water < .45 && (!e.seen.shore || !reachable(e, e.seen.shore)) && !e.mem.has('river')) || (e.food < .35 && !Object.keys(e.inv).some(edible));
     for (const A of acts.LIST) if (!A.joinOnly && e.age >= A.minAge) A.cands(e, e.seen, cands);
+    if (e.unreach && e.unreach.size) {
+      for (let i = cands.length - 1; i >= 0; i--) if (!reachable(e, cands[i])) cands.splice(i, 1);
+      if (e.unreach.size > 30) for (const [k, t] of e.unreach) if (S.time - t > 120) e.unreach.delete(k);
+    }
     if (!cands.length) return;
     const s0 = ahead(e), p0 = M.painOf(e, s0), tau = .01 + .05 * (1 - e.tr.iq), magic = magicOf(e), memo = new Map();
+    let search = 0;
+    if (e.searching) {
+      const noWater = e.water < .45 && !cands.some(c => c.A.id === 'drink'), noFood = e.food < .35 && !cands.some(c => FOODISH.has(c.A.id));
+      if (noWater || noFood) {
+        for (let i = 0; i < M.NV; i++) s2[i] = s0[i];
+        if (noWater) s2[M.WATER] = .7;
+        if (noFood) s2[M.FOOD] = .6;
+        spared(s0, s2);
+        search = Math.max(0, p0 - M.painOf(e, s2)) * (.25 + .3 * e.tr.iq);   // a fair chance of finding it out there
+      }
+    }
     let bestC = null, bu = -Infinity;
     for (const c of cands) {
-      const u = score(e, c, s0, p0, magic, memo) + tau * gumbel();
+      const u = score(e, c, s0, p0, magic, memo) + tau * gumbel() + (c.A.id === 'wander' ? search : 0);
       if (u > bu) { bu = u; bestC = c; }
     }
     start(e, bestC);
@@ -542,9 +600,9 @@ export function createSim(world, hooks) {
         // walking straight doesn't get there: plan a way around
         T.path = findPath(world.blocked, e.x, e.z, T.x, T.z) || [];
         T.stuck = 0;
-        if (!T.path.length) { if (T.k && e.mem.get(T.k) && Math.hypot(e.mem.get(T.k).x - T.x, e.mem.get(T.k).z - T.z) < 5) e.mem.delete(T.k); return end(e, false); }
-      } else if (T.stuck > 10) return end(e, false);
-      if (T.go > 90) return end(e, false);
+        if (!T.path.length) { noWay(e, T.x, T.z); if (T.k && e.mem.get(T.k) && Math.hypot(e.mem.get(T.k).x - T.x, e.mem.get(T.k).z - T.z) < 5) e.mem.delete(T.k); return end(e, false); }
+      } else if (T.stuck > 10) { noWay(e, T.x, T.z); return end(e, false); }
+      if (T.go > 90) { noWay(e, T.x, T.z); return end(e, false); }
       return;
     }
     halt(e, dt);
@@ -557,6 +615,10 @@ export function createSim(world, hooks) {
     if (r === 'chase') { T.stage = 'go'; T.best = Infinity; T.stuck = 0; return; }
     if (r === 'done' || T.t >= T.dur) return end(e, true);
   }
+  // somewhere they could not find a way to (across water, walled in): not worth trying again for a while
+  const cellOf = (px, pz) => Math.floor(px / 48) * 100003 + Math.floor(pz / 48);
+  function noWay(e, px, pz) { if (!e.unreach) e.unreach = new Map(); e.unreach.set(cellOf(px, pz), S.time); }
+  const reachable = (e, c) => c.here || !e.unreach || !(S.time - (e.unreach.get(cellOf(c.x, c.z)) ?? -1e9) < 120);
   function end(e, ok) {
     const T = e.task;
     if (!T) return;
@@ -662,6 +724,19 @@ export function createSim(world, hooks) {
     M.setLike(e, 'p:' + c.id, Math.max(M.like(e, 'p:' + c.id), 50));
     M.setLike(c, 'p:' + e.id, Math.max(M.like(c, 'p:' + e.id), 50));
     first('adopt', 'family', `🤱 ${e.name} took in ${c.name}, whose mother is gone`);
+  }
+  // small children (2–5) don't fend for themselves: whoever brings them up shares their food when they're hungry
+  function feedChild(e) {
+    if (e.food > .35) return;
+    for (const id of [e.motherId, e.fatherId, e.carer]) {
+      const p = id && S.byId.get(id);
+      if (!p || p.asleep || Math.abs(p.x - e.x) > 60 || Math.abs(p.z - e.z) > 60) continue;
+      const k = Object.keys(p.inv).find(edible);
+      if (!k) continue;
+      take(p, k); add(e, k); eat(e, k);
+      if (rnd() < .3) p.bubble = { ch: '🍼', t: 1.2 };
+      return;
+    }
   }
   function infant(e, dt) {
     const m = carerOf(e);
@@ -845,9 +920,14 @@ export function createSim(world, hooks) {
     }
   }
   // how much a thing is worth to someone, all told (what it does, what it makes, how much they like it)
+  // (remembered for the rest of the simulated second: a trade weighs a dozen things at once)
   function valueOf(e, k) {
-    const s0 = ahead(e), p0 = M.painOf(e, s0), v = itemValue(e, k, s0, p0, new Map());
-    return v.now + v.later + worth(e, k) * .1;
+    const sec = Math.floor(S.time);
+    if (!e._vc || e._vc.t !== sec) { const s0 = ahead(e).slice(); e._vc = { t: sec, s0, p0: M.painOf(e, s0), memo: new Map(), v: new Map() }; }
+    const c = e._vc;
+    let v = c.v.get(k);
+    if (v === undefined) { const iv = itemValue(e, k, c.s0, c.p0, c.memo); v = iv.now + iv.later + worth(e, k) * .1; c.v.set(k, v); }
+    return v;
   }
   function dealWith(e, p) {
     const mine = Object.keys(e.inv).filter(k => e.inv[k] > 0), theirs = Object.keys(p.inv).filter(k => p.inv[k] > 0);
@@ -961,7 +1041,7 @@ export function createSim(world, hooks) {
     first('love', 'love', `💞 ${e.name} and ${p.name} made love for the first time in this world`);
     if (f.preg > 0 || fertile(f) <= 0 || fertile(m) <= 0) return;
     const nursing = f.kids.some(id => { const c = S.byId.get(id); return c && c.age < 1; });
-    const p0 = .4 * S.fertility * fertile(f) * fertile(m) * (nursing ? .35 : 1) * (S.people.length > S.cap ? .05 : 1);
+    const p0 = .4 * S.fertility * fertile(f) * fertile(m) * (nursing ? .35 : 1);
     if (rnd() < p0) {
       f.preg = .001;
       f.pregFather = { id: m.id, name: m.name, sur: m.sur, hue: m.hue, tall: m.tall, tr: m.tr };
@@ -981,6 +1061,7 @@ export function createSim(world, hooks) {
         tr: M.inheritTraits(m.tr, f ? f.tr : null), food: .9, water: .9,
       });
       b.goal = M.rollGoal(b);   // a purpose from birth, out of temperament; life may change it later
+      bringUp(b, [m, fa].filter(Boolean));
       // a parent's love for a newborn is not learned
       for (const p of [m, fa]) if (p) { M.setLike(p, 'p:' + b.id, 75); M.setLike(b, 'p:' + p.id, 60); p.kids.push(b.id); }
       for (const id of m.kids) { const s = S.byId.get(id); if (s && s !== b) { M.setLike(s, 'p:' + b.id, 30); M.setLike(b, 'p:' + s.id, 30); } }
@@ -1155,8 +1236,8 @@ export function createSim(world, hooks) {
     M.notice(p, 'p:' + e.id, .8);
     first('tend', 'healer', `🩹 ${e.name} tended to ${p.name}'s ${p.bleed > .01 ? 'wounds' : 'sickness'}`);
   }
-  const fireNear = (e, r) => S.fires.find(f => !f.wild && f.fuel > 0 && Math.abs(f.x - e.x) < r && Math.abs(f.z - e.z) < r) || null;
-  const furnaceNear = (e, r) => S.structs.find(s => s.k === 'furnace' && (s.prog ?? 1) >= 1 && Math.abs(s.x - e.x) < r && Math.abs(s.z - e.z) < r) || null;
+  const fireNear = (e, r) => { let f0 = null; env.near('fires', e.x, e.z, r * 1.42, f => { if (!f0 && !f.wild && f.fuel > 0 && Math.abs(f.x - e.x) < r && Math.abs(f.z - e.z) < r) f0 = f; }); return f0; };
+  const furnaceNear = (e, r) => { let f0 = null; env.near('structs', e.x, e.z, r * 1.42, s => { if (!f0 && s.k === 'furnace' && (s.prog ?? 1) >= 1 && Math.abs(s.x - e.x) < r && Math.abs(s.z - e.z) < r) f0 = s; }); return f0; };
   // a furnace burns hot enough for anything a campfire does too
   const stationNear = (e, where) => where === 'furnace' ? !!furnaceNear(e, 45) : where === 'fire' ? !!(fireNear(e, 40) || furnaceNear(e, 45)) : true;
   const sandy = (px, pz) => world.elev(px, pz) < SEA + .028;
@@ -1206,7 +1287,9 @@ export function createSim(world, hooks) {
   function spotFree(px, pz, k) {
     if (world.elev(px, pz) < SEA + .02) return false;
     if (world.nearbySolids(px, pz).some(o => Math.hypot(o.x - px, o.z - pz) < 16)) return false;
-    return !S.structs.some(s => Math.hypot(s.x - px, s.z - pz) < (k === 'wall' ? 12 : 24));
+    let clear = true;
+    env.near('structs', px, pz, k === 'wall' ? 12 : 24, () => { clear = false; });
+    return clear;
   }
   function buildSpot(e, k) {
     const h = e.home || e;
@@ -1256,7 +1339,10 @@ export function createSim(world, hooks) {
     for (let i = 0; i < 10; i++) {
       const a = rnd() * TAU, r = 10 + rnd() * 40, px = h.x + Math.cos(a) * r, pz = h.z + Math.sin(a) * r;
       if (world.elev(px, pz) < SEA + .02 || world.temp(px, pz) < world.SNOW) continue;
-      if (S.crops.some(c => Math.hypot(c.x - px, c.z - pz) < 10) || S.structs.some(s => Math.hypot(s.x - px, s.z - pz) < 14)) continue;
+      let taken = false;
+      env.near('crops', px, pz, 10, () => { taken = true; });
+      env.near('structs', px, pz, 14, () => { taken = true; });
+      if (taken) continue;
       return { x: px, z: pz };
     }
     return null;
@@ -1424,6 +1510,67 @@ export function createSim(world, hooks) {
   // Three bands of twelve, each around its own fire, far apart and strangers to one another.
   // ancestors: optional heritage from the survivors of an earlier world (see evolve.js) — each founder then
   // carries one ancestor's genes (with mutation) and what they believed, liked and knew how to make.
+  // a grown copy of someone's mind (for performance tests and seeding): same knowledge, new body and name
+  function clonePerson(a, px, pz) {
+    const e = makePerson({ sex: a.sex, name: freshName(a.sex), sur: a.sur, age: 16 + rnd() * 30, x: px, z: pz, tr: M.inheritTraits(a.tr, null) });
+    e.bornYear = S.year - e.age;
+    for (const [k, m] of a.M) e.M.set(k, { n: m.n, T: m.T, d: m.d.slice(), g: { ...(m.g || {}) } });
+    for (const [c, w] of a.W) if (!c.startsWith('p:')) e.W.set(c, w);
+    for (const [rk, r] of a.R) e.R.set(rk, { ...r });
+    for (const [k, m] of a.mem) e.mem.set(k, { ...m });
+    e.goal = M.rollGoal(e); e.inv = { berry: 3, stick: 1 };
+    hooks.birth(e);
+    return e;
+  }
+  // ───────── what is passed down ─────────
+  // A child grows up hearing what their parents learned the hard way: which actions help, what is good to eat,
+  // how things are made, where the water is. Taken in lightly (they will still learn for themselves), and
+  // sometimes wrongly: a parent's superstition is handed down with the rest.
+  function bringUp(b, parents) {
+    if (!parents.length) return;
+    const keys = new Map();
+    for (const p of parents) for (const [k, m] of p.M) if (m.n >= 1.5 && !k.startsWith('p:')) { const o = keys.get(k); if (!o || o.n < m.n) keys.set(k, m); }
+    for (const [k, m] of keys) b.M.set(k, { n: Math.min(2, m.n * .35), T: m.T, d: m.d.slice(), g: m.g ? { ...m.g } : {} });
+    for (const p of parents) for (const [rk, r] of p.R) if (r.ok && !(b.R.get(rk) || {}).ok && rnd() < .55) b.R.set(rk, { ok: 1, tries: 0, res: r.res });
+    const mom = parents[0];
+    for (const [c, w] of mom.W) if (!c.startsWith('p:') && !c.startsWith('b:') && c !== '~' && Math.abs(w) > 10) b.W.set(c, w * .5);
+    for (const k of ['river', 'fire', 'hut', 'house', 'hall', 'store', 'well', 'bush', 'tree']) { const m = mom.mem.get(k); if (m) b.mem.set(k, { ...m }); }
+  }
+  // The culture of a people: what its grown-ups know, pooled (the experience most of them share counts most).
+  // Saved in the database; founders of new worlds and families arriving from beyond start from it.
+  function culture() {
+    const adults = S.people.filter(e => e.age >= 16);
+    if (adults.length < 6) return null;
+    const pool = new Map(), recipes = new Map(), likes = new Map();
+    for (const e of adults) {
+      for (const [k, m] of e.M) {
+        if (m.n < 1 || k.startsWith('p:') || k.includes(':p:')) continue;
+        let o = pool.get(k);
+        if (!o) pool.set(k, o = { n: 0, T: 0, d: new Array(M.NV).fill(0), g: {} });
+        const w = Math.min(m.n, 8);
+        o.n += w; o.T += m.T * w;
+        for (let i = 0; i < M.NV; i++) o.d[i] += m.d[i] * w;
+        for (const g in m.g || {}) o.g[g] = (o.g[g] || 0) + m.g[g] * w;
+      }
+      for (const [rk, r] of e.R) if (r.ok) { const o = recipes.get(rk) || { n: 0, res: r.res }; o.n++; recipes.set(rk, o); }
+      for (const [c, w] of e.W) if (!c.startsWith('p:') && !c.startsWith('b:') && c !== '~') { const o = likes.get(c) || [0, 0]; o[0] += w; o[1]++; likes.set(c, o); }
+    }
+    const top = [...pool.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 160);
+    return {
+      year: Math.floor(S.year), people: adults.length, techs: S.techs.size,
+      M: top.map(([k, o]) => [k, { n: Math.min(3, o.n / adults.length * 2), T: Math.round(o.T / o.n * 10) / 10, d: o.d.map(v => Math.round(v / o.n * 1e3) / 1e3), g: Object.fromEntries(Object.entries(o.g).map(([g, v]) => [g, Math.round(v / o.n * 100) / 100])) }]),
+      R: [...recipes.entries()].map(([rk, o]) => [rk, { res: o.res, share: Math.round(o.n / adults.length * 100) / 100 }]),
+      W: [...likes.entries()].filter(([, o]) => o[1] >= 3).map(([c, o]) => [c, Math.round(o[0] / o[1])]),
+    };
+  }
+  // a person raised in that culture
+  function steep(e, c) {
+    if (!c) return;
+    for (const [k, m] of c.M) e.M.set(k, { n: m.n * (.6 + rnd() * .5), T: m.T, d: m.d.map(v => v * (.85 + rnd() * .3)), g: { ...m.g } });
+    for (const [rk, r] of c.R) if (rnd() < Math.min(.9, r.share + .15)) e.R.set(rk, { ok: 1, tries: 0, res: r.res });
+    for (const [k, w] of c.W) M.setLike(e, k, w * (.7 + rnd() * .5));
+  }
+
   // ───────── newcomers ─────────
   // The world does not end at the edge of what we simulate: when the land around has emptied, a family from
   // beyond the hills drifts in, now and then, with its own ways and some of the crafts known out there.
@@ -1438,7 +1585,7 @@ export function createSim(world, hooks) {
     for (let i = 0; i < n; i++) {
       const sex = i % 2 ? 'F' : 'M', adult = i < n - 2, age = adult ? 16 + rnd() * 24 : 3 + rnd() * 9, p = world.landNear(camp.x, camp.z, 20, 110);
       const e = makePerson({ sex, name: freshName(sex), sur, age, bornYear: S.year - age, x: p.x, z: p.z });
-      raise(e); e.goal = M.rollGoal(e);
+      raise(e); steep(e, adult ? S.culture : null); e.goal = M.rollGoal(e);
       e.inv = { berry: 2 + Math.floor(rnd() * 3), stick: 1 + Math.floor(rnd() * 2) };
       if (adult && rnd() < .6) e.R.set('stick+stick', { ok: 1, tries: 1, res: 'FIRE' });
       if (adult && rnd() < .5) e.R.set('stone+stone', { ok: 1, tries: 1, res: 'blade' });
@@ -1447,7 +1594,7 @@ export function createSim(world, hooks) {
       band.push(e);
     }
     for (const a of band) for (const b of band) if (a !== b) M.setLike(a, 'p:' + b.id, 25 + rnd() * 30);
-    const shore = env.nearestShore(camp.x, camp.z, 400);
+    const shore = env.nearestShore(camp.x, camp.z, 1500);
     for (const e of band) { if (shore) e.mem.set('river', { x: shore.x, z: shore.z, t: S.time }); e.mem.set('fire', { x: camp.x, z: camp.z, t: S.time }); hooks.birth(e); }
     env.makeFire(camp.x, camp.z, 300);
     log('arrival', `🚶 Strangers came from beyond the hills: the ${sur} family, ${n} of them`);
@@ -1476,13 +1623,13 @@ export function createSim(world, hooks) {
         const e = makePerson({ sex, name: freshName(sex), sur: surs[(ci * 4 + i % 4) % surs.length], age, bornYear: -age, x: p.x, z: p.z });
         const pool = heirs && (heirs[sex].length ? heirs[sex] : heirs[sex === 'M' ? 'F' : 'M']);
         if (pool && pool.length) inherit(e, pool[Math.floor(rnd() * pool.length)]);
-        else { raise(e); e.goal = M.rollGoal(e); }
+        else { raise(e); steep(e, S.culture); e.goal = M.rollGoal(e); }
         e.inv = { berry: 2 + Math.floor(rnd() * 3), stick: Math.floor(rnd() * 3) };
         band.push(e);
       }
       // they know each other and the land around their fire; a few know old crafts
       for (const a of band) for (const b of band) if (a !== b) M.setLike(a, 'p:' + b.id, 15 + rnd() * 30);
-      const shore = env.nearestShore(camp.x, camp.z, 400);
+      const shore = env.nearestShore(camp.x, camp.z, 1500);
       for (const e of band) {
         if (shore) e.mem.set('river', { x: shore.x, z: shore.z, t: 0 });
         e.mem.set('fire', { x: camp.x, z: camp.z, t: 0 });
@@ -1519,7 +1666,13 @@ export function createSim(world, hooks) {
   }
 
   // ───────── the clock ─────────
-  let secT = 0, socT = 0;
+  let secT = 0, socT = 0, farT = 9, frame = 0;
+  // Attention: someone nobody is watching (no player within sight) is lived in coarser steps — a third as often,
+  // three times as long — and looks around every other second. Nothing they decide changes; only the grain of time.
+  function attention() {
+    const eyes = [...S.avatars.values()].filter(players.here);
+    for (const e of S.people) e.far = !S.noLod && !eyes.some(a => Math.abs(a.x - e.x) < 1100 && Math.abs(a.z - e.z) < 1100);
+  }
   function tick(dt) {
     S.time += dt;
     S.dayT = frac(S.time / DAY + .3);
@@ -1528,29 +1681,41 @@ export function createSim(world, hooks) {
     if ((agridT += dt) >= .25) { agridT = 0; agrid.clear(); for (const a of S.animals) agrid.add(a); }
     env.tick(dt);
     zoo.tick(dt);
+    if ((farT += dt) >= 2) { farT = 0; attention(); }
+    frame++;
     for (const e of S.people.slice()) {
       if (!e.alive) continue;
-      if (e.age < 2) infant(e, dt);
-      else if (e.held) { e.held = false; e.y = 0; }   // walking on their own now
-      body(e, dt);
-      if (!e.alive) continue;
-      if ((e.lookT -= dt) <= 0) { e.lookT += 1; think(e); }
-      if (e.held) continue;
-      if (e.downUntil > S.time) { e.act = 'down'; e.label = 'Lying beaten on the ground'; halt(e, dt); continue; }
-      if (e.act === 'down') { e.act = null; e.label = 'Idle'; }
-      if (e.task) runTask(e, dt);
-      else if ((e.thinkT -= dt) <= 0 && e.age >= 2) choose(e);
-      else halt(e, dt);
+      let dt0 = dt;
+      const skip = S.skipFar ?? 3;   // (steps longer than about 0.3 s change lives too: kept at that)
+      if (e.far && !e.held) { if ((frame + e.id) % skip) continue; dt = dt0 * skip; }
+      lifeStep(e, dt);
+      dt = dt0;
     }
     players.tick(dt);
     separate();
     if ((secT += dt) >= 1) { secT -= 1; perSecond(); }
     if ((socT += dt) >= 5) { socT = 0; soc.update(); }
   }
+  function lifeStep(e, dt) {
+    {
+      if (e.age < 2) infant(e, dt);
+      else if (e.age < 5 && (e.lookT || 0) < dt) feedChild(e);
+      else if (e.held) { e.held = false; e.y = 0; }   // walking on their own now
+      body(e, dt);
+      if (!e.alive) return;
+      if ((e.lookT -= dt) <= 0) { e.lookT += S.lookFar ?? 1; think(e); }   // (looking less often than every second changes lives: people meet, court and learn through it)
+      if (e.held) return;
+      if (e.downUntil > S.time) { e.act = 'down'; e.label = 'Lying beaten on the ground'; halt(e, dt); return; }
+      if (e.act === 'down') { e.act = null; e.label = 'Idle'; }
+      if (e.task) runTask(e, dt);
+      else if ((e.thinkT -= dt) <= 0 && e.age >= 2) choose(e);
+      else halt(e, dt);
+    }
+  }
   // bodies don't overlap (but never get pushed into the water)
   function separate() {
     for (const e of S.people) {
-      if (e.held || (e.task && e.task.A.id === 'mate')) continue;
+      if (e.held || e.far || (e.task && e.task.A.id === 'mate')) continue;
       pgrid.near(e.x, e.z, 7, (o, d) => {
         if (o === e || o.held || d < .01) return;
         const push = (7 - d) * .15, nx = e.x + (e.x - o.x) / d * push, nz = e.z + (e.z - o.z) / d * push;
@@ -1601,18 +1766,25 @@ export function createSim(world, hooks) {
   const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
   const WEAR = e => (has(e, 'cloak') ? 'c' : '') + (has(e, 'necklace') ? 'n' : '');
   let lastPlantVer = -1, pickedCache = [], sentVer = -1;
-  function snapshot(full = false) {
+  // view: { x, z, r } — only what lies within r of (x, z) is sent; conn remembers what that viewer already has
+  function snapshot(full = false, view = null, conn = {}) {
+    const inV = view ? o => Math.abs(o.x - view.x) < view.r && Math.abs(o.z - view.z) < view.r : () => true;
     const working = [];
-    for (const e of S.people) if (e.task && e.task.stage === 'do' && (e.task.A.id === 'chop' || e.task.A.id === 'gather') && e.task.tgt && e.task.tgt.id) working.push(e.task.tgt.id);
+    for (const e of S.people) if (e.task && e.task.stage === 'do' && (e.task.A.id === 'chop' || e.task.A.id === 'gather') && e.task.tgt && e.task.tgt.id && inV(e)) working.push(e.task.tgt.id);
     // what has been picked changes rarely: sent when it changes, and every couple of seconds (regrowth isn't an event)
-    if (S.plantVer !== lastPlantVer || full) { lastPlantVer = S.plantVer; pickedCache = env.pickedIds(); }
-    const sendPicked = full || sentVer !== lastPlantVer;
-    sentVer = lastPlantVer;
+    if (S.plantVer !== lastPlantVer) { lastPlantVer = S.plantVer; pickedCache = env.pickedIds(); }
+    const sendPicked = full || conn.pv !== lastPlantVer;
+    conn.pv = lastPlantVer;
+    let picked = pickedCache;
+    if (view && sendPicked) {
+      const c0x = Math.floor((view.x - view.r) / CH), c1x = Math.floor((view.x + view.r) / CH), c0z = Math.floor((view.z - view.r) / CH), c1z = Math.floor((view.z + view.r) / CH);
+      picked = pickedCache.filter(id => { const p = (id[0] === '!' ? id.slice(1) : id).split(':'); const cx = +p[0], cz = +p[1]; return cx >= c0x && cx <= c1x && cz >= c0z && cz <= c1z; });
+    }
     const chiefs = [...S.bands.values()].map(b => b.chief).filter(Boolean);
     return {
       t: 'state', time: r2(S.time), dayT: S.dayT, year: r2(S.year), ts: S.timeScale, season: env.season(), sf: frac(S.year) * 4 % 1,
       rain: r2(S.weather.rain), storm: S.weather.storm ? 1 : 0, speed: S.speed, ws: r2(S.winterSev || 0),
-      people: S.people.map(e => ({
+      people: S.people.filter(inV).map(e => ({
         id: e.id, x: r1(e.x), z: r1(e.z), y: r1(e.y), h: r2(e.heading), vx: r1(e.vx), vz: r1(e.vz), held: e.held ? 1 : 0,
         act: e.act, carry: e.task && e.task.stage === 'go' && e.task.item ? e.task.item : null, tool: e.task && e.task.A.tool ? e.task.A.tool(e, e.task) : null,
         sex: e.sex, age: r2(e.age), hue: r1(e.hue), tall: r2(e.tall), preg: e.preg > 0 ? 1 : 0,
@@ -1620,12 +1792,12 @@ export function createSim(world, hooks) {
         sail: e.sailing ? 1 : 0, drunk: e.drunkT > S.time ? 1 : 0, ...(full ? { n: e.name } : {}), cold: e.warmth < .35 ? 1 : 0, sick: e.dis + e.tox > .3 ? 1 : 0, bleed: e.bleed > .05 ? 1 : 0, grp: e.band,
         it: WEAR(e), fol: S.followers.get(e.id) || 0, load: invTotal(e), run: e.task && e.task.stage === 'go' && e.task.A.speed && e.task.A.speed(e, e.task) === 'run' ? 1 : 0,
       })),
-      animals: S.animals.map(a => ({ id: a.id, k: a.k, x: r1(a.x), z: r1(a.z), h: r2(a.h), vx: r1(a.vx), vz: r1(a.vz), act: a.act, tame: a.owner ? 1 : 0, young: a.age < 1 ? 1 : 0, hp: r2(Math.max(0, a.hp) / KINDS[a.k].hp) })),
-      corpses: S.corpses.map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), h: r2(c.h || 0), rot: r2(env.rotOf(c)), sex: c.sex, hue: c.hue, tall: c.tall, age: c.age, meat: c.meat, v: c.violent ? 1 : 0 })),
-      fires: S.fires.map(f => ({ id: f.id, x: r1(f.x), z: r1(f.z), f: r2(Math.min(1, f.fuel / 200)), wild: f.wild ? 1 : 0 })),
-      structs: S.structs.map(s => ({ id: s.id, k: s.k, x: r1(s.x), z: r1(s.z), own: s.owner, burn: s.burning ? 1 : 0, c: s.c ? M.conceptName(s.c, S.names) : null, sym: s.c && S.faiths.get(s.c) ? S.faiths.get(s.c).symbol : null, n: s.k === 'store' || s.k === 'granary' ? invTotal(s) : 0, ...(s.lore ? { lore: s.lore.length } : {}), p: s.prog != null && s.prog < 1 ? Math.round(s.prog * 100) / 100 : 1 })),
-      crops: S.crops.map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), ripe: env.cropRipe(c) ? 1 : 0, g: r2(Math.min(1, (S.time - c.planted) / 100)) })),
-      ...(sendPicked ? { picked: pickedCache } : {}),
+      animals: S.animals.filter(inV).map(a => ({ id: a.id, k: a.k, x: r1(a.x), z: r1(a.z), h: r2(a.h), vx: r1(a.vx), vz: r1(a.vz), act: a.act, tame: a.owner ? 1 : 0, young: a.age < 1 ? 1 : 0, hp: r2(Math.max(0, a.hp) / KINDS[a.k].hp) })),
+      corpses: S.corpses.filter(inV).map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), h: r2(c.h || 0), rot: r2(env.rotOf(c)), sex: c.sex, hue: c.hue, tall: c.tall, age: c.age, meat: c.meat, v: c.violent ? 1 : 0 })),
+      fires: S.fires.filter(inV).map(f => ({ id: f.id, x: r1(f.x), z: r1(f.z), f: r2(Math.min(1, f.fuel / 200)), wild: f.wild ? 1 : 0 })),
+      structs: S.structs.filter(inV).map(s => ({ id: s.id, k: s.k, x: r1(s.x), z: r1(s.z), own: s.owner, burn: s.burning ? 1 : 0, c: s.c ? M.conceptName(s.c, S.names) : null, sym: s.c && S.faiths.get(s.c) ? S.faiths.get(s.c).symbol : null, n: s.k === 'store' || s.k === 'granary' ? invTotal(s) : 0, ...(s.lore ? { lore: s.lore.length } : {}), p: s.prog != null && s.prog < 1 ? Math.round(s.prog * 100) / 100 : 1 })),
+      crops: S.crops.filter(inV).map(c => ({ id: c.id, k: c.k, x: r1(c.x), z: r1(c.z), ripe: env.cropRipe(c) ? 1 : 0, g: r2(Math.min(1, (S.time - c.planted) / 100)) })),
+      ...(sendPicked ? { picked } : {}),
       working, felledVer: S.felledVer,
       bands: Object.fromEntries([...S.bands.values()].map(b => [b.id, b.color])), chiefs,
     };
@@ -1745,7 +1917,7 @@ export function createSim(world, hooks) {
   function serializePerson(e) {
     const o = {};
     for (const k in e) {
-      if (['task', 'seen', 'sv', 'recent', 'EL', 'bubble', 'act', 'lastHurt'].includes(k)) continue;
+      if (['task', 'seen', 'sv', 'recent', 'EL', 'bubble', 'act', 'lastHurt', 'unreach', 'foes', '_vc'].includes(k)) continue;
       const v = e[k];
       o[k] = v instanceof Map ? (k === 'M' ? [...v.entries()].map(([kk, m]) => [kk, { n: m.n, T: m.T, d: m.d.map(r => Math.round(r * 1e4) / 1e4) }]) : mapOut(v)) : v;
     }
@@ -1793,7 +1965,7 @@ export function createSim(world, hooks) {
   }
 
   return {
-    S, x, tick, found, heritage, snapshot, stats, live, society, economy, settlements, felled, serialize, restore, explain: (id, n) => S.byId.has(id) ? explain(S.byId.get(id), n) : null,
+    S, x, tick, found, heritage, culture, clonePerson, setCulture: c => { S.culture = c || null; }, snapshot, stats, live, society, economy, settlements, felled, serialize, restore, explain: (id, n) => S.byId.has(id) ? explain(S.byId.get(id), n) : null,
     setSpeed: v => { S.speed = clamp(v, 0, 200); }, setFertility: v => { S.fertility = clamp(v, 0, 20); }, setCapacity: v => { S.cap = clamp(Math.round(v), 10, 2000); },
     setTimeScale: v => { S.timeScale = clamp(v, 1, 40); },
     setPlayer: (id, p) => S.players.set(id, p), removePlayer: id => S.players.delete(id),

@@ -367,7 +367,12 @@ function frame(now) {
   updateHint();
   syncFelled();
   // send our position to the server ~10×/s (other players see us)
-  if ((sendT += dt) > .1 && net) { sendT = 0; net.send({ t: 'player', x: P.x, z: P.z, h: P.heading, y: P.y, vx: P.vx, vz: P.vz }); }
+  if ((sendT += dt) > .1 && net) {
+    sendT = 0;
+    // where the camera looks and how far it sees: the server sends only that part of the world
+    const vr = Math.max(G.W, G.H) / G.cam.zoom * .75 + 300;
+    net.send({ t: 'player', x: P.x, z: P.z, h: P.heading, y: P.y, vx: P.vx, vz: P.vz, cx: G.cam.x, cz: G.cam.z, vr });
+  }
 
   const c = G.cam, ct = G.follow && G.people.has(G.follow.id) ? G.follow : (G.follow = null, P);
   c.x += (ct.x + ct.vx * .3 - c.x) * damp(4.5, dt);

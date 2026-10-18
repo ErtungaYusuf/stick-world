@@ -35,6 +35,7 @@ function boot(fresh) {
     death: p => writes.push({ kind: 'death', p: { ...p, stats: { ...p.stats }, goal: { ...p.goal } } }),
     fx: msg => broadcast({ t: 'fx', ...msg }),
   });
+  sim.setCulture(db.getMeta('culture'));
   const saved = db.load();
   if (saved) sim.restore(saved); else { sim.found(); flushWrites(); db.save(sim.serialize()); }
   Object.assign(ctx, { seed, world, sim });
@@ -82,7 +83,11 @@ wss.on('connection', ws => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (m.t === 'join' && typeof m.token === 'string' && m.token.length >= 8) { ws.token = m.token.slice(0, 64); ctx.sim.join(ws.token, typeof m.name === 'string' ? m.name : null); return; }
     if (!ws.token) return;
-    if (m.t === 'player' && [m.x, m.z, m.h, m.y, m.vx, m.vz].every(Number.isFinite)) ctx.sim.move(ws.token, { x: m.x, z: m.z, h: m.h, y: m.y, vx: m.vx, vz: m.vz });
+    if (m.t === 'player' && [m.x, m.z, m.h, m.y, m.vx, m.vz].every(Number.isFinite)) {
+      ctx.sim.move(ws.token, { x: m.x, z: m.z, h: m.h, y: m.y, vx: m.vx, vz: m.vz });
+      // what the camera can see (plus a margin), so only that is sent
+      if ([m.cx, m.cz, m.vr].every(Number.isFinite)) ws.view = { x: m.cx, z: m.cz, r: Math.max(400, Math.min(6000, m.vr)) };
+    }
     else if (m.t === 'act') ctx.sim.act(ws.token, m);
   });
   ws.on('close', () => { if (ws.token && ![...wss.clients].some(c => c !== ws && c.token === ws.token)) ctx.sim.leave(ws.token); });
@@ -102,12 +107,21 @@ setInterval(() => {
   while (pending >= 1 && performance.now() - start < TICK * 1000 * .8) { ctx.sim.tick(TICK * k); pending -= 1; }
   if (pending >= 1) pending = Math.min(pending, speed / k);
   if (++ticks % BROADCAST_EVERY === 0) {
-    const snap = ctx.sim.snapshot(ticks % FULL_EVERY === 0);
-    snap.players = ctx.sim.others();
-    broadcast(snap);
+    const full = ticks % FULL_EVERY === 0, others = ctx.sim.others();
+    for (const c of wss.clients) {
+      if (c.readyState !== 1) continue;
+      const snap = ctx.sim.snapshot(full, c.view || null, c.snap || (c.snap = {}));
+      snap.players = others;
+      c.send(JSON.stringify(snap));
+    }
     for (const c of wss.clients) if (c.readyState === 1 && c.token) { const v = ctx.sim.view(c.token, c.me || (c.me = {})); if (v) c.send(JSON.stringify(v)); }
   }
-  if ((sinceSave += TICK) >= SAVE_EVERY) { sinceSave = 0; flushWrites(); db.save(ctx.sim.serialize()); }
+  if ((sinceSave += TICK) >= SAVE_EVERY) {
+    sinceSave = 0; flushWrites(); db.save(ctx.sim.serialize());
+    // the culture is kept whenever a living people (not a last handful) has something to pass on
+    const c = ctx.sim.culture();
+    if (c && c.people >= 8) { db.setMeta('culture', c); ctx.sim.setCulture(c); }
+  }
 }, TICK * 1000);
 
 function shutdown() { try { flushWrites(); db.save(ctx.sim.serialize()); } finally { process.exit(0); } }

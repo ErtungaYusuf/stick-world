@@ -11,7 +11,7 @@ import { createSim } from '../server/life/sim.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const seed = +process.argv[2] || 1000 + Math.floor(Math.random() * 9000);
-const years = +process.argv[3] || 2000, dt = +process.argv[4] || .2;
+const years = +process.argv[3] || 2000, dt = +process.argv[4] || .1;
 const dir = join(ROOT, 'data', 'history', String(seed));
 mkdirSync(dir, { recursive: true });
 const resume = process.argv.includes('resume') && existsSync(join(dir, 'state.json'));
@@ -31,7 +31,11 @@ const sim = createSim(world, {
   },
   fx: () => {},
 });
+// the culture shared by all long runs (what peoples learned before, in any world)
+const CULTURE = join(ROOT, 'data', 'history', 'culture.json');
+if (existsSync(CULTURE)) try { sim.setCulture(JSON.parse(readFileSync(CULTURE, 'utf8'))); } catch { /* half-written: start without */ }
 if (resume) sim.restore(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))); else sim.found();
+
 const S = sim.S, t0 = Date.now();
 let lastYear = Math.floor(S.year);
 if (resume) console.log(`seed ${seed} resumed at year ${lastYear}`);
@@ -56,7 +60,11 @@ while (S.year < years) {
     leader: st.chief ? st.chief.name : null, sec: Math.round((Date.now() - t0) / 1000),
   }) + '\n');
   flush();
-  if (y % 25 === 0 && y > 0) writeFileSync(join(dir, 'state.json'), JSON.stringify(sim.serialize().state));
+  if (y % 25 === 0 && y > 0) {
+    writeFileSync(join(dir, 'state.json'), JSON.stringify(sim.serialize().state));
+    const c = sim.culture();
+    if (c && c.people >= 8) { writeFileSync(CULTURE, JSON.stringify(c)); sim.setCulture(c); }
+  }
   if (y % 25 === 0) console.log(`seed ${seed} · year ${y} · ${ppl.length} alive · ${S.techs.size} techs · ${Math.round((Date.now() - t0) / 1000)}s`);
 }
 flush();
